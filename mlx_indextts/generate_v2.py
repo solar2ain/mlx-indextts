@@ -499,8 +499,28 @@ class IndexTTSv2:
         self._preprocessing_initialized = True
 
     def _load_speaker(self, npz_path: str) -> dict:
-        """Load pre-computed speaker conditioning from .npz file."""
+        """Load pre-computed speaker conditioning from .npz file.
+
+        Raises:
+            ValueError: If the file is not a v2.0 speaker file
+        """
         data = np.load(npz_path)
+
+        # Check version
+        if 'version' in data:
+            version = float(data['version'][0])
+            if version < 2.0:
+                raise ValueError(
+                    f"Speaker file is v{version:.1f} format, but this is IndexTTS 2.0. "
+                    f"Please use the correct model version."
+                )
+        elif 'conditioning' in data:
+            # Old v1.5 format (no version field, has 'conditioning')
+            raise ValueError(
+                "Speaker file is v1.5 format, but this is IndexTTS 2.0. "
+                "Please use the correct model version."
+            )
+
         cache = {
             'audio_path': npz_path,
             'spk_cond_emb': torch.from_numpy(data['spk_cond_emb']).to(self.device),
@@ -527,9 +547,10 @@ class IndexTTSv2:
         # Process reference audio
         ref_data = self._process_reference_audio(audio_path)
 
-        # Save to npz
+        # Save to npz with version
         np.savez(
             output_path,
+            version=np.array([2.0]),  # Version identifier
             spk_cond_emb=ref_data['spk_cond_emb'].cpu().numpy(),
             S_ref=ref_data['S_ref'].cpu().numpy(),
             ref_mel=ref_data['ref_mel'].cpu().numpy(),

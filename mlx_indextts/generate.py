@@ -30,6 +30,7 @@ def save_speaker(
     """
     np.savez(
         str(output_path),
+        version=np.array([1.5]),  # Version identifier
         conditioning=np.array(conditioning),
         ref_mel=np.array(ref_mel),
     )
@@ -43,8 +44,21 @@ def load_speaker(path: Union[str, Path]) -> tuple:
 
     Returns:
         Tuple of (conditioning, ref_mel) as mx.arrays
+
+    Raises:
+        ValueError: If the file is not a v1.5 speaker file
     """
     data = np.load(str(path))
+
+    # Check version
+    if 'version' in data:
+        version = float(data['version'][0])
+        if version >= 2.0:
+            raise ValueError(
+                f"Speaker file is v{version:.1f} format, but this is IndexTTS 1.5. "
+                f"Please use the correct model version."
+            )
+
     conditioning = mx.array(data["conditioning"])
     ref_mel = mx.array(data["ref_mel"])
     return conditioning, ref_mel
