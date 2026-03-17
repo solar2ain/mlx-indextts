@@ -11,9 +11,19 @@ IndexTTS for Apple Silicon using MLX. Zero-shot text-to-speech with voice clonin
 - Pre-computed speaker conditioning for faster inference
 - Reproducible generation with random seed
 
+## Requirements
+
+- macOS with Apple Silicon (M1/M2/M3/M4)
+- Python 3.10+
+- MLX >= 0.18.0
+- [uv](https://docs.astral.sh/uv/) (recommended package manager)
+
 ## Installation
 
 ```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # From source
 git clone https://github.com/your-repo/mlx-indextts.git
 cd mlx-indextts
@@ -35,7 +45,7 @@ uv sync --extra dev
 Convert PyTorch weights to MLX format:
 
 ```bash
-mlx-indextts convert \
+uv run mlx-indextts convert \
     --model-dir /path/to/indexTTS-1.5 \
     --output ./models/mlx-indexTTS-1.5
 ```
@@ -43,11 +53,20 @@ mlx-indextts convert \
 ### 2. Generate Speech
 
 ```bash
-mlx-indextts generate \
+# Basic generation
+uv run mlx-indextts generate \
     -m ./models/mlx-indexTTS-1.5 \
     -r ./reference.wav \
     -t "你好，这是一个语音合成测试。" \
     -o ./output.wav
+
+# With 8-bit quantization (faster, lower memory)
+uv run mlx-indextts generate \
+    -m ./models/mlx-indexTTS-1.5 \
+    -r ./reference.wav \
+    -t "你好，这是一个语音合成测试。" \
+    -o ./output.wav \
+    --quantize 8
 ```
 
 ### 3. Pre-compute Speaker (Optional)
@@ -56,13 +75,13 @@ Pre-compute speaker conditioning for faster inference (30x speedup for condition
 
 ```bash
 # Save speaker conditioning
-mlx-indextts speaker \
+uv run mlx-indextts speaker \
     -m ./models/mlx-indexTTS-1.5 \
     -r ./reference.wav \
     -o ./speaker.npz
 
 # Use pre-computed speaker
-mlx-indextts generate \
+uv run mlx-indextts generate \
     -m ./models/mlx-indexTTS-1.5 \
     -r ./speaker.npz \
     -t "你好，世界！" \
@@ -74,7 +93,7 @@ mlx-indextts generate \
 Use `--seed` for reproducible output:
 
 ```bash
-mlx-indextts generate \
+uv run mlx-indextts generate \
     -m ./models/mlx-indexTTS-1.5 \
     -r ./reference.wav \
     -t "你好，世界！" \
@@ -113,7 +132,7 @@ audio = tts.generate(
 ## CLI Options
 
 ```bash
-mlx-indextts generate --help
+uv run mlx-indextts generate --help
 
 Options:
   -m, --model          Path to MLX model directory (required)
@@ -125,6 +144,7 @@ Options:
   --top-k              Top-k sampling (default: 30)
   --top-p              Top-p sampling (default: 0.8)
   -s, --seed           Random seed for reproducible generation
+  -q, --quantize       Runtime quantization: 4, 8, or fp32 (default: fp32)
   -v, --verbose        Print verbose output
   -p, --play           Play audio after generation
 ```
@@ -145,6 +165,18 @@ Options:
 | Conditioning from .wav | ~23ms |
 | Conditioning from .npz | ~0.7ms |
 
+### Quantization
+
+Use `--quantize` for runtime quantization (faster inference, lower memory):
+
+| Quantization | Memory | Speed (RTF) | Quality |
+|--------------|--------|-------------|---------|
+| fp32 (default) | Baseline | ~0.52 | Best |
+| 8-bit | ~72% | ~0.44 | Good |
+| 4-bit | ~60% | ~0.43 | Acceptable |
+
+> **Note**: Quantization is applied at runtime, no need to re-convert models.
+
 ## Model Architecture
 
 IndexTTS is a GPT-based zero-shot TTS model:
@@ -164,6 +196,7 @@ Text → [Tokenizer] → [GPT Decoder] ← conditioning
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3.10+
 - MLX >= 0.18.0
+- [uv](https://docs.astral.sh/uv/) (recommended package manager)
 
 ## License
 

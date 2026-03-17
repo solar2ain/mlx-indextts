@@ -236,10 +236,65 @@ def convert_bigvgan_weights(weights: Dict[str, np.ndarray], config: IndexTTSConf
     return new_weights
 
 
+def _quantize_weights(
+    weights: Dict[str, mx.array],
+    config: IndexTTSConfig,
+    bits: int = 8,
+    group_size: int = 64,
+) -> Dict[str, mx.array]:
+    """Quantize GPT weights for reduced memory usage.
+
+    Only quantizes Linear layers in the GPT backbone (gpt.h.*) where dimensions
+    are divisible by group_size. Other layers (embeddings, heads, perceiver)
+    are kept in full precision.
+
+    Args:
+        weights: Original weights dictionary
+        config: Model configuration
+        bits: Quantization bits (4 or 8)
+        group_size: Quantization group size
+
+    Returns:
+        Quantized weights dictionary
+    """
+    import re
+
+    new_weights = {}
+    quantized_count = 0
+    skipped_count = 0
+
+    for key, value in weights.items():
+        # Only quantize GPT backbone linear layers (gpt.h.*.attn.* and gpt.h.*.mlp.*)
+        # These are the largest components and benefit most from quantization
+        is_gpt_backbone = bool(re.match(r"gpt\.h\.\d+\.(attn|mlp)\.", key))
+        is_weight = key.endswith(".weight") and value.ndim == 2
+
+        if is_gpt_backbone and is_weight:
+            out_dim, in_dim = value.shape
+            if in_dim % group_size == 0 and out_dim % group_size == 0:
+                # Quantize this weight
+                quantized, scales, biases = mx.quantize(value, bits=bits, group_size=group_size)
+                # Store with special naming convention for quantized weights
+                base_key = key[:-7]  # Remove ".weight"
+                new_weights[f"{base_key}.weight"] = quantized
+                new_weights[f"{base_key}.scales"] = scales
+                new_weights[f"{base_key}.biases"] = biases
+                quantized_count += 1
+                continue
+            else:
+                skipped_count += 1
+
+        new_weights[key] = value
+
+    print(f"  Quantized {quantized_count} layers, kept {skipped_count} layers in fp32")
+    return new_weights
+
+
 def convert_model(
     model_dir: Union[str, Path],
     output_dir: Union[str, Path],
     config_path: Optional[Union[str, Path]] = None,
+    quantize_bits: Optional[int] = None,
 ) -> None:
     """Convert IndexTTS PyTorch model to MLX format.
 
@@ -247,6 +302,7 @@ def convert_model(
         model_dir: Directory containing PyTorch checkpoints
         output_dir: Output directory for MLX weights
         config_path: Optional path to config.yaml (default: model_dir/config.yaml)
+        quantize_bits: Quantization bits (4, 8, or None for fp32). Default: None (fp32)
     """
     model_dir = Path(model_dir)
     output_dir = Path(output_dir)
@@ -259,6 +315,10 @@ def convert_model(
 
     print(f"Converting IndexTTS model from {model_dir}")
     print(f"Version: {config.version or '1.0'}")
+    if quantize_bits:
+        print(f"Quantization: {quantize_bits}-bit")
+    else:
+        print(f"Quantization: None (fp32)")
 
     # Convert GPT weights
     gpt_path = model_dir / config.gpt_checkpoint
@@ -266,6 +326,11 @@ def convert_model(
         print(f"Converting GPT weights from {gpt_path}")
         gpt_numpy = load_pytorch_weights(gpt_path)
         gpt_weights = convert_gpt_weights(gpt_numpy, config)
+
+        # Apply quantization if requested
+        if quantize_bits:
+            print(f"Quantizing GPT to {quantize_bits}-bit...")
+            gpt_weights = _quantize_weights(gpt_weights, config, quantize_bits)
 
         # Save GPT weights
         gpt_output = output_dir / "gpt.safetensors"
@@ -295,10 +360,13 @@ def convert_model(
         shutil.copy(bpe_path, output_dir / "tokenizer.model")
         print(f"Copied BPE model to {output_dir / 'tokenizer.model'}")
 
-    # Save config as JSON
+    # Save config as JSON (include quantization info)
     config_output = output_dir / "config.json"
+    config_dict = config.to_dict()
+    if quantize_bits:
+        config_dict["quantize_bits"] = quantize_bits
     with open(config_output, "w") as f:
-        json.dump(config.to_dict(), f, indent=2, default=str)
+        json.dump(config_dict, f, indent=2, default=str)
     print(f"Saved config to {config_output}")
 
     print(f"\nConversion complete! Model saved to {output_dir}")
@@ -313,7 +381,7 @@ def load_mlx_model(
         model_dir: Directory containing converted MLX weights
 
     Returns:
-        Tuple of (config, gpt_weights, bigvgan_weights)
+        Tuple of (config, gpt_weights, bigvgan_weights, quantize_bits)
     """
     model_dir = Path(model_dir)
 
@@ -321,6 +389,9 @@ def load_mlx_model(
     config_path = model_dir / "config.json"
     with open(config_path, "r") as f:
         config_dict = json.load(f)
+
+    # Check if model is quantized
+    quantize_bits = config_dict.get("quantize_bits", None)
 
     # Reconstruct config
     from mlx_indextts.config import GPTConfig, BigVGANConfig, MelConfig, ConformerConfig
@@ -345,4 +416,4 @@ def load_mlx_model(
     gpt_weights = mx.load(str(model_dir / "gpt.safetensors"))
     bigvgan_weights = mx.load(str(model_dir / "bigvgan.safetensors"))
 
-    return config, gpt_weights, bigvgan_weights
+    return config, gpt_weights, bigvgan_weights, quantize_bits

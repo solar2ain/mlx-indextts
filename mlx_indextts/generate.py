@@ -98,29 +98,50 @@ class IndexTTS:
     def load_model(
         cls,
         model_dir: Union[str, Path],
+        memory_limit_gb: float = 8.0,
+        quantize_bits: Optional[int] = None,
     ) -> "IndexTTS":
         """Load model from directory.
 
         Args:
             model_dir: Directory containing converted MLX model
+            memory_limit_gb: GPU memory limit in GB (default: 8.0, 0 for no limit)
+            quantize_bits: Runtime quantization bits (4 or 8), None for no quantization
 
         Returns:
             IndexTTS instance
         """
+        import mlx.nn as nn
+
+        # Set memory limit before loading model
+        if memory_limit_gb > 0:
+            mx.set_memory_limit(int(memory_limit_gb * 1024 * 1024 * 1024))
+
         from mlx_indextts.convert import load_mlx_model
 
         model_dir = Path(model_dir)
 
-        # Load config and weights
-        config, gpt_weights, bigvgan_weights = load_mlx_model(model_dir)
+        # Load config and weights (returns quantize_bits from saved model)
+        config, gpt_weights, bigvgan_weights, saved_quantize_bits = load_mlx_model(model_dir)
 
         # Create models
         gpt = UnifiedVoice(config)
         bigvgan = BigVGAN(config.bigvgan)
 
+        # Determine quantization: use saved if model was pre-quantized, otherwise use runtime option
+        effective_quantize = saved_quantize_bits or quantize_bits
+
+        # If model was saved with quantization, quantize before loading weights
+        if saved_quantize_bits:
+            nn.quantize(gpt.gpt, bits=saved_quantize_bits, group_size=64)
+
         # Load weights
         gpt.load_weights(list(gpt_weights.items()))
         bigvgan.load_weights(list(bigvgan_weights.items()))
+
+        # If runtime quantization requested (and model wasn't pre-quantized)
+        if quantize_bits and not saved_quantize_bits:
+            nn.quantize(gpt.gpt, bits=quantize_bits, group_size=64)
 
         # Set to eval mode for inference (critical for BatchNorm)
         gpt = gpt.eval()

@@ -28,6 +28,7 @@ dependencies = [
     "tqdm>=4.65.0",
     "huggingface-hub>=0.20.0",
     "wetext>=0.1.2",
+    "psutil>=7.2.2",
 ]
 
 [project.optional-dependencies]

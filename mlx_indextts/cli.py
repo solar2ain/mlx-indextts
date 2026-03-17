@@ -9,10 +9,19 @@ def convert_command(args):
     """Handle the convert command."""
     from mlx_indextts.convert import convert_model
 
+    # Parse quantize option
+    quantize_bits = None
+    if args.quantize:
+        if args.quantize.lower() == "fp32":
+            quantize_bits = None
+        else:
+            quantize_bits = int(args.quantize)
+
     convert_model(
         model_dir=args.model_dir,
         output_dir=args.output,
         config_path=args.config,
+        quantize_bits=quantize_bits,
     )
 
 
@@ -22,9 +31,21 @@ def generate_command(args):
     import subprocess
     import sys
 
+    # Parse quantize option
+    quantize_bits = None
+    if args.quantize:
+        if args.quantize.lower() == "fp32":
+            quantize_bits = None
+        else:
+            quantize_bits = int(args.quantize)
+
     # Load model
     print(f"Loading model from {args.model}...")
-    tts = IndexTTS.load_model(args.model)
+    tts = IndexTTS.load_model(
+        args.model,
+        memory_limit_gb=args.memory_limit,
+        quantize_bits=quantize_bits,
+    )
 
     # Generate speech
     print(f"Generating speech for: {args.text[:50]}...")
@@ -60,7 +81,7 @@ def speaker_command(args):
 
     # Load model
     print(f"Loading model from {args.model}...")
-    tts = IndexTTS.load_model(args.model)
+    tts = IndexTTS.load_model(args.model, memory_limit_gb=args.memory_limit)
 
     # Compute and save speaker
     print(f"Computing speaker conditioning from {args.ref_audio}...")
@@ -101,6 +122,13 @@ def main():
         type=str,
         default=None,
         help="Path to config.yaml (default: model_dir/config.yaml)",
+    )
+    convert_parser.add_argument(
+        "--quantize",
+        "-q",
+        type=str,
+        default="fp32",
+        help="Quantization bits: 4, 8, or fp32 for no quantization (default: fp32)",
     )
     convert_parser.set_defaults(func=convert_command)
 
@@ -180,6 +208,19 @@ def main():
         action="store_true",
         help="Play audio after generation (macOS/Linux)",
     )
+    generate_parser.add_argument(
+        "--memory-limit",
+        type=float,
+        default=8.0,
+        help="GPU memory limit in GB (default: 8.0, 0 for no limit)",
+    )
+    generate_parser.add_argument(
+        "--quantize",
+        "-q",
+        type=str,
+        default="fp32",
+        help="Runtime quantization: 4, 8, or fp32 (default: fp32)",
+    )
     generate_parser.set_defaults(func=generate_command)
 
     # Speaker command (save pre-computed conditioning)
@@ -207,6 +248,12 @@ def main():
         type=str,
         required=True,
         help="Output .npz file path for speaker conditioning",
+    )
+    speaker_parser.add_argument(
+        "--memory-limit",
+        type=float,
+        default=8.0,
+        help="GPU memory limit in GB (default: 8.0, 0 for no limit)",
     )
     speaker_parser.set_defaults(func=speaker_command)
 
