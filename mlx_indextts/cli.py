@@ -165,19 +165,37 @@ def generate_command(args):
 
 def speaker_command(args):
     """Handle the speaker command - save pre-computed speaker conditioning."""
-    from mlx_indextts.generate import IndexTTS
     import time
 
-    # Load model
-    print(f"Loading model from {args.model}...")
-    tts = IndexTTS.load_model(args.model, memory_limit_gb=args.memory_limit)
+    model_dir = Path(args.model)
+    version = detect_mlx_version(model_dir)
 
-    # Compute and save speaker
-    print(f"Computing speaker conditioning from {args.ref_audio}...")
-    start = time.perf_counter()
-    tts.save_speaker(args.ref_audio, args.output)
-    elapsed = time.perf_counter() - start
-    print(f"Speaker saved to {args.output} ({elapsed:.2f}s)")
+    print(f"Using IndexTTS {version}")
+    print(f"Loading model from {args.model}...")
+
+    if version == "2.0":
+        from mlx_indextts.generate_v2 import IndexTTSv2
+
+        tts = IndexTTSv2(
+            model_dir=args.model,
+            memory_limit_gb=args.memory_limit,
+        )
+
+        print(f"Computing speaker conditioning from {args.ref_audio}...")
+        start = time.perf_counter()
+        tts.save_speaker(args.ref_audio, args.output)
+        elapsed = time.perf_counter() - start
+        print(f"Speaker saved to {args.output} ({elapsed:.2f}s)")
+    else:
+        from mlx_indextts.generate import IndexTTS
+
+        tts = IndexTTS.load_model(args.model, memory_limit_gb=args.memory_limit)
+
+        print(f"Computing speaker conditioning from {args.ref_audio}...")
+        start = time.perf_counter()
+        tts.save_speaker(args.ref_audio, args.output)
+        elapsed = time.perf_counter() - start
+        print(f"Speaker saved to {args.output} ({elapsed:.2f}s)")
 
 
 def main():
@@ -337,10 +355,10 @@ def main():
     )
     generate_parser.set_defaults(func=generate_command)
 
-    # Speaker command (save pre-computed conditioning, v1.5 only)
+    # Speaker command (save pre-computed conditioning)
     speaker_parser = subparsers.add_parser(
         "speaker",
-        help="Save pre-computed speaker conditioning for faster inference (v1.5 only)",
+        help="Save pre-computed speaker conditioning for faster inference",
     )
     speaker_parser.add_argument(
         "--model",

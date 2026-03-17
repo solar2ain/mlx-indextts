@@ -160,8 +160,17 @@ class IndexTTSv2:
         print(f"  Config: {self.config_path}")
         print(f"  MLX weights: {self.mlx_model_dir}")
 
-        # Initialize PyTorch modules (preprocessing only)
-        self._init_pytorch_modules()
+        # PyTorch preprocessing modules (lazy loaded on first .wav processing)
+        # Note: semantic_codec is always needed for vq2emb during generation
+        self._preprocessing_initialized = False
+        self.semantic_model = None
+        self.campplus = None
+
+        # Always load semantic_codec (needed for mel_codes -> embedding)
+        self._init_semantic_codec()
+
+        # Always load emotion matrices (small .pt files, needed for --emotion)
+        self._load_emotion_matrices()
 
         # Initialize MLX models (GPT, S2Mel, BigVGAN)
         self._init_mlx_models()
@@ -177,38 +186,12 @@ class IndexTTSv2:
 
         print("IndexTTS 2.0 ready!")
 
-    def _init_pytorch_modules(self):
-        """Initialize PyTorch modules for preprocessing.
+    def _init_semantic_codec(self):
+        """Initialize semantic codec (always needed for vq2emb during generation)."""
+        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_codec
 
-        Uses inlined modules from mlx_indextts.indextts (mirrored from index-tts
-        source with aligned paths) for easier understanding and debugging.
-        """
-        # Import from inlined source (mirrors index-tts paths)
-        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
-        from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
-        from transformers import AutoFeatureExtractor
-
-        # Find w2v stats file
-        w2v_stat_path = self.mlx_model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            w2v_stat_path = self.model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            raise FileNotFoundError(f"W2V stats file not found: {self.cfg.w2v_stat}")
-
-        # W2V-BERT (Semantic Model) - using inlined build_semantic_model
-        print("Loading W2V-BERT...")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
-            path_=str(w2v_stat_path)
-        )
-        self.semantic_model = self.semantic_model.to(self.device)
-        self.semantic_mean = self.semantic_mean.to(self.device)
-        self.semantic_std = self.semantic_std.to(self.device)
-        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-
-        # Semantic Codec - using inlined build_semantic_codec
         print("Loading Semantic Codec...")
         self.semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
-        # Load weights from HuggingFace
         try:
             import safetensors.torch
             from huggingface_hub import hf_hub_download
@@ -220,7 +203,34 @@ class IndexTTSv2:
         self.semantic_codec = self.semantic_codec.to(self.device)
         self.semantic_codec.eval()
 
-        # CAMPPlus - using inlined CAMPPlus model
+    def _init_pytorch_modules(self):
+        """Initialize PyTorch modules for .wav preprocessing.
+
+        Loads W2V-BERT, CAMPPlus, and emotion matrices.
+        Called lazily when processing .wav files (not needed for .npz).
+        """
+        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model
+        from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
+        from transformers import AutoFeatureExtractor
+
+        # Find w2v stats file
+        w2v_stat_path = self.mlx_model_dir / self.cfg.w2v_stat
+        if not w2v_stat_path.exists():
+            w2v_stat_path = self.model_dir / self.cfg.w2v_stat
+        if not w2v_stat_path.exists():
+            raise FileNotFoundError(f"W2V stats file not found: {self.cfg.w2v_stat}")
+
+        # W2V-BERT (Semantic Model)
+        print("Loading W2V-BERT...")
+        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
+            path_=str(w2v_stat_path)
+        )
+        self.semantic_model = self.semantic_model.to(self.device)
+        self.semantic_mean = self.semantic_mean.to(self.device)
+        self.semantic_std = self.semantic_std.to(self.device)
+        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
+
+        # CAMPPlus
         print("Loading CAMPPlus...")
         try:
             from huggingface_hub import hf_hub_download
@@ -235,8 +245,8 @@ class IndexTTSv2:
         self.campplus = self.campplus.to(self.device)
         self.campplus.eval()
 
-        # Load emotion matrices for emotion control
-        print("Loading emotion matrices...")
+    def _load_emotion_matrices(self):
+        """Load emotion matrices for emotion control (small .pt files)."""
         emo_matrix_path = None
         spk_matrix_path = None
 
@@ -254,16 +264,55 @@ class IndexTTSv2:
         if emo_matrix_path and spk_matrix_path:
             self.emo_matrix = torch.load(str(emo_matrix_path), map_location=self.device)
             self.spk_matrix = torch.load(str(spk_matrix_path), map_location=self.device)
-            # Split by emotion category
             self.emo_matrix_split = torch.split(self.emo_matrix, EMO_NUM)
             self.spk_matrix_split = torch.split(self.spk_matrix, EMO_NUM)
-            print(f"Emotion matrices loaded: emo_matrix {self.emo_matrix.shape}, spk_matrix {self.spk_matrix.shape}")
         else:
             self.emo_matrix = None
             self.spk_matrix = None
             self.emo_matrix_split = None
             self.spk_matrix_split = None
-            print("Warning: Emotion matrices not found, emotion control disabled")
+
+    def _init_pytorch_modules(self):
+        """Initialize PyTorch modules for .wav preprocessing.
+
+        Loads W2V-BERT and CAMPPlus.
+        Called lazily when processing .wav files (not needed for .npz).
+        """
+        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model
+        from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
+        from transformers import AutoFeatureExtractor
+
+        # Find w2v stats file
+        w2v_stat_path = self.mlx_model_dir / self.cfg.w2v_stat
+        if not w2v_stat_path.exists():
+            w2v_stat_path = self.model_dir / self.cfg.w2v_stat
+        if not w2v_stat_path.exists():
+            raise FileNotFoundError(f"W2V stats file not found: {self.cfg.w2v_stat}")
+
+        # W2V-BERT (Semantic Model)
+        print("Loading W2V-BERT...")
+        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
+            path_=str(w2v_stat_path)
+        )
+        self.semantic_model = self.semantic_model.to(self.device)
+        self.semantic_mean = self.semantic_mean.to(self.device)
+        self.semantic_std = self.semantic_std.to(self.device)
+        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
+
+        # CAMPPlus
+        print("Loading CAMPPlus...")
+        try:
+            from huggingface_hub import hf_hub_download
+            campplus_path = hf_hub_download("funasr/campplus", filename="campplus_cn_common.bin")
+            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
+            state_dict = torch.load(campplus_path, map_location=self.device)
+            self.campplus.load_state_dict(state_dict)
+            print(f"  CAMPPlus weights restored from: {campplus_path}")
+        except Exception as e:
+            print(f"Warning: Failed to load CAMPPlus weights: {e}")
+            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
+        self.campplus = self.campplus.to(self.device)
+        self.campplus.eval()
 
     def _init_mlx_models(self):
         """Initialize MLX models."""
@@ -442,12 +491,70 @@ class IndexTTSv2:
         feat = (feat - self.semantic_mean) / self.semantic_std
         return feat
 
+    def _ensure_pytorch_modules(self):
+        """Lazy load PyTorch preprocessing modules on first .wav use."""
+        if self._preprocessing_initialized:
+            return
+        self._init_pytorch_modules()
+        self._preprocessing_initialized = True
+
+    def _load_speaker(self, npz_path: str) -> dict:
+        """Load pre-computed speaker conditioning from .npz file."""
+        data = np.load(npz_path)
+        cache = {
+            'audio_path': npz_path,
+            'spk_cond_emb': torch.from_numpy(data['spk_cond_emb']).to(self.device),
+            'S_ref': torch.from_numpy(data['S_ref']).to(self.device),
+            'ref_mel': torch.from_numpy(data['ref_mel']).to(self.device),
+            'style': torch.from_numpy(data['style']).to(self.device),
+            'prompt_condition': torch.from_numpy(data['prompt_condition']).to(self.device),
+        }
+        return cache
+
+    def save_speaker(self, audio_path: str, output_path: str) -> None:
+        """Pre-compute and save speaker conditioning to .npz file.
+
+        This saves all conditioning data needed for generation, allowing
+        faster inference by skipping W2V-BERT, SemanticCodec, and CAMPPlus.
+
+        Args:
+            audio_path: Path to reference audio file (.wav)
+            output_path: Output path for .npz file
+        """
+        # Ensure PyTorch modules are loaded
+        self._ensure_pytorch_modules()
+
+        # Process reference audio
+        ref_data = self._process_reference_audio(audio_path)
+
+        # Save to npz
+        np.savez(
+            output_path,
+            spk_cond_emb=ref_data['spk_cond_emb'].cpu().numpy(),
+            S_ref=ref_data['S_ref'].cpu().numpy(),
+            ref_mel=ref_data['ref_mel'].cpu().numpy(),
+            style=ref_data['style'].cpu().numpy(),
+            prompt_condition=ref_data['prompt_condition'].cpu().numpy(),
+        )
+
     @torch.no_grad()
     def _process_reference_audio(self, audio_path: str):
-        """Process reference audio to get all conditioning."""
+        """Process reference audio to get all conditioning.
+
+        Supports both .wav files (requires PyTorch preprocessing) and
+        .npz files (pre-computed, no PyTorch needed).
+        """
         # Check cache
         if self.cache.get('audio_path') == audio_path:
             return self.cache
+
+        # Load from .npz if pre-computed
+        if audio_path.endswith('.npz'):
+            self.cache = self._load_speaker(audio_path)
+            return self.cache
+
+        # Otherwise, need PyTorch modules for preprocessing
+        self._ensure_pytorch_modules()
 
         # Load audio
         audio, sr = librosa.load(audio_path, sr=None)
