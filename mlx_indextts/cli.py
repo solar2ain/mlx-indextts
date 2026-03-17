@@ -301,7 +301,7 @@ def main():
         "-s",
         type=int,
         default=None,
-        help="随机种子，用于可复现生成",
+        help="Random seed for reproducible generation",
     )
     generate_parser.add_argument(
         "--verbose",
@@ -319,39 +319,39 @@ def main():
         "--memory-limit",
         type=float,
         default=None,
-        help="GPU 内存限制 GB (default: 8 for v1.5, 12 for v2.0)",
+        help="GPU memory limit in GB (default: 8 for v1.5, 12 for v2.0)",
     )
     generate_parser.add_argument(
         "--quantize",
         "-q",
         type=str,
         default="fp32",
-        help="运行时量化 (GPT only): 4, 8, 或 fp32 (default: fp32)",
+        help="Runtime quantization (GPT only): 4, 8, or fp32 (default: fp32)",
     )
     # v2.0 specific options
     generate_parser.add_argument(
         "--steps",
         type=int,
         default=25,
-        help="[v2.0 only] S2Mel diffusion/CFM 采样步数，越大质量越高但越慢 (default: 25)",
+        help="[v2.0 only] S2Mel diffusion/CFM sampling steps (default: 25)",
     )
     generate_parser.add_argument(
         "--cfg",
         type=float,
         default=0.7,
-        help="[v2.0 only] Classifier-Free Guidance 强度，控制生成与条件的一致性 (default: 0.7)",
+        help="[v2.0 only] Classifier-Free Guidance rate (default: 0.7)",
     )
     generate_parser.add_argument(
         "--emotion",
         type=str,
         default=None,
-        help="[v2.0 only] 情感控制: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm，或 'happy:0.8,sad:0.2'",
+        help="[v2.0 only] Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm, or 'happy:0.8,sad:0.2'",
     )
     generate_parser.add_argument(
         "--emo-alpha",
         type=float,
         default=1.0,
-        help="[v2.0 only] 情感强度 0.0-1.0，0=参考音频情感，1=完全指定情感 (default: 1.0)",
+        help="[v2.0 only] Emotion intensity 0.0-1.0 (0=reference audio, 1=full specified, default: 1.0)",
     )
     generate_parser.set_defaults(func=generate_command)
 
