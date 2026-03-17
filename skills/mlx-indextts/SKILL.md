@@ -65,23 +65,34 @@ uv run mlx-indextts generate \
 - `--steps`: Diffusion steps (default: 25)
 - `--cfg`: CFG rate (default: 0.7)
 
-### Pre-compute Speaker (v1.5 only, Faster Inference)
+### Pre-compute Speaker (Faster Inference)
+
+Pre-compute speaker conditioning to skip audio preprocessing. **Recommended for v2.0** - reduces load time from ~9s to ~1.5s.
 
 ```bash
 cd ~/Projects/mlx-indextts
-# Save speaker
+
+# v1.5
 uv run mlx-indextts speaker \
     -m models/mlx-indexTTS-1.5 \
     -r <reference_audio.wav> \
-    -o <speaker.npz>
+    -o <speaker_v15.npz>
+
+# v2.0
+uv run mlx-indextts speaker \
+    -m models/mlx-indexTTS-2.0 \
+    -r <reference_audio.wav> \
+    -o <speaker_v20.npz>
 
 # Generate using pre-computed speaker
 uv run mlx-indextts generate \
-    -m models/mlx-indexTTS-1.5 \
-    -r <speaker.npz> \
+    -m models/mlx-indexTTS-2.0 \
+    -r <speaker_v20.npz> \
     -t "Hello, world!" \
     -o output.wav
 ```
+
+**Note**: v1.5 and v2.0 speaker files are incompatible.
 
 ### Convert Model (Auto-detects version)
 
@@ -115,7 +126,9 @@ uv run mlx-indextts convert \
 | Max tokens | 800 | 1815 |
 | Emotion control | ❌ | ✅ 8 emotions |
 | Runtime quantization | ✅ | ✅ |
+| Speaker pre-compute | ✅ | ✅ |
 | RTF (M2 Max) | ~0.5 | ~1.3 |
+| Load time (.npz) | ~0.3s | ~1.5s |
 
 ## Supported Emotions (v2.0)
 
@@ -201,6 +214,7 @@ uv run mlx-indextts generate \
 | v1.5 8-bit | ~0.44 | Recommended |
 | v2.0 fp32 | ~1.3 | With S2Mel CFM |
 | v2.0 8-bit | ~1.1 | 1.2x speedup |
+| v2.0 (.npz) | ~1.5 | 6x faster load than .wav |
 
 ## Troubleshooting
 
@@ -217,4 +231,6 @@ Solution: Use a v2.0 model for emotion control.
 
 ### Want faster inference?
 1. Use `--quantize 8` for 8-bit quantization
-2. For v1.5: Use pre-computed speaker (.npz) instead of raw audio (.wav)
+2. Use pre-computed speaker (.npz) instead of raw audio (.wav)
+   - v1.5: Minor speedup
+   - v2.0: **6x faster load** (1.5s vs 9s) - highly recommended

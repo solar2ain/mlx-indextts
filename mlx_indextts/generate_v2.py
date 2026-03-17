@@ -1,12 +1,13 @@
 """IndexTTS 2.0 MLX Inference.
 
 This module provides the main inference pipeline for IndexTTS 2.0 using MLX.
-Uses PyTorch only for preprocessing (W2V-BERT, SemanticCodec, CAMPPlus).
-GPT, S2Mel, and BigVGAN all run on MLX.
+Uses PyTorch only for preprocessing (.wav files): W2V-BERT, SemanticCodec, CAMPPlus.
+With .npz speaker files, only vq2emb (MLX) is needed - no PyTorch preprocessing.
+GPT, S2Mel, BigVGAN, and vq2emb all run on MLX.
 
 Architecture:
-- PyTorch: W2V-BERT, SemanticCodec, CAMPPlus (preprocessing only)
-- MLX: GPT v2 (autoregressive), S2Mel (CFM), BigVGAN v2 (vocoder)
+- PyTorch (only for .wav preprocessing): W2V-BERT, SemanticCodec, CAMPPlus
+- MLX: GPT v2, S2Mel (CFM), BigVGAN v2, vq2emb
 """
 
 import os
@@ -161,13 +162,13 @@ class IndexTTSv2:
         print(f"  MLX weights: {self.mlx_model_dir}")
 
         # PyTorch preprocessing modules (lazy loaded on first .wav processing)
-        # Note: semantic_codec is always needed for vq2emb during generation
         self._preprocessing_initialized = False
         self.semantic_model = None
         self.campplus = None
+        self.semantic_codec = None  # Only loaded when processing .wav files
 
-        # Always load semantic_codec (needed for mel_codes -> embedding)
-        self._init_semantic_codec()
+        # Load MLX vq2emb (always needed for mel_codes -> embedding)
+        self._init_vq2emb()
 
         # Always load emotion matrices (small .pt files, needed for --emotion)
         self._load_emotion_matrices()
@@ -185,6 +186,53 @@ class IndexTTSv2:
         self.cache = {}
 
         print("IndexTTS 2.0 ready!")
+
+    def _init_vq2emb(self):
+        """Initialize MLX vq2emb (codebook embedding + linear projection).
+
+        This replaces the PyTorch semantic_codec.quantizer.vq2emb for generation.
+        Weights are loaded from vq2emb.safetensors (0.28MB).
+        """
+        from safetensors import safe_open
+
+        vq2emb_path = self.mlx_model_dir / "vq2emb.safetensors"
+        if not vq2emb_path.exists():
+            raise FileNotFoundError(
+                f"vq2emb.safetensors not found at {vq2emb_path}. "
+                f"Please re-convert the model with the latest convert_v2.py."
+            )
+
+        # Load weights
+        with safe_open(str(vq2emb_path), framework="numpy") as f:
+            self._vq2emb_codebook = mx.array(f.get_tensor("codebook.weight"))  # (8192, 8)
+            self._vq2emb_weight = mx.array(f.get_tensor("out_project.weight"))  # (1024, 8, 1)
+            self._vq2emb_bias = mx.array(f.get_tensor("out_project.bias"))  # (1024,)
+
+        # Pre-compute 2D weight for matmul (kernel_size=1 Conv1d)
+        self._vq2emb_weight_2d = self._vq2emb_weight.squeeze(-1)  # (1024, 8)
+
+        print(f"  vq2emb (MLX) loaded from {vq2emb_path}")
+
+    def _vq2emb_forward(self, codes: mx.array) -> mx.array:
+        """Convert mel codes to embeddings using MLX vq2emb.
+
+        Args:
+            codes: (batch, length) mel codes
+
+        Returns:
+            (batch, 1024, length) embedding
+        """
+        # Embedding lookup: codes (B, T) -> emb (B, T, 8)
+        emb = self._vq2emb_codebook[codes]
+
+        # Linear projection (kernel_size=1 Conv1d)
+        # emb: (B, T, 8) @ weight.T (8, 1024) + bias -> (B, T, 1024)
+        out = emb @ self._vq2emb_weight_2d.T + self._vq2emb_bias
+
+        # Transpose to (B, 1024, T) for Conv1d output format
+        out = out.transpose(0, 2, 1)
+
+        return out
 
     def _init_semantic_codec(self):
         """Initialize semantic codec (always needed for vq2emb during generation)."""
@@ -495,6 +543,7 @@ class IndexTTSv2:
         """Lazy load PyTorch preprocessing modules on first .wav use."""
         if self._preprocessing_initialized:
             return
+        self._init_semantic_codec()  # Needed for .wav preprocessing
         self._init_pytorch_modules()
         self._preprocessing_initialized = True
 
@@ -841,14 +890,12 @@ class IndexTTSv2:
         # gpt_layer projection (MLX)
         latent = self.s2mel_mlx.gpt_layer(latent)
 
-        # We need semantic codes for vq2emb - use PyTorch semantic_codec
-        # Convert mel_codes to PyTorch for semantic processing
-        codes_pt = torch.tensor([mel_codes], device=self.device)
-        S_infer_pt = self.semantic_codec.quantizer.vq2emb(codes_pt.unsqueeze(1))
-        S_infer_pt = S_infer_pt.transpose(1, 2)  # (1, T, 1024)
+        # vq2emb: mel_codes -> embeddings (MLX)
+        codes_mx = mx.array([mel_codes], dtype=mx.int32)
+        S_infer = self._vq2emb_forward(codes_mx)  # (1, 1024, T)
+        S_infer = S_infer.transpose(0, 2, 1)  # (1, T, 1024)
 
-        # Convert to MLX and add latent
-        S_infer = mx.array(S_infer_pt.detach().cpu().numpy())
+        # Add latent
         S_infer = S_infer + latent
 
         # Length regulator (MLX)

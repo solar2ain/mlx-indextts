@@ -272,3 +272,69 @@ if "perceiver_encoder" in key or "emo_perceiver_encoder" in key:
 - [ ] 导出 PyTorch 中间结果用于对齐测试
 - [ ] **所有模型加载后调用 `.eval()`**
 - [ ] 修改公共代码后运行 `pytest tests/`
+
+---
+
+## 性能优化
+
+### 1. MLX vq2emb 替代 PyTorch Semantic Codec
+
+**问题**: v2.0 加载时需要加载 PyTorch Semantic Codec (~3.5s)，即使使用 .npz 预计算也无法避免
+
+**分析**:
+- Semantic Codec 在推理时只用 `vq2emb` 功能
+- vq2emb 只有 0.28MB 权重：codebook (8192, 8) + Conv1d (1024, 8, 1)
+- Conv1d kernel_size=1 等价于线性变换
+
+**关键**: Conv1d 使用 `weight_norm`，需要正确计算实际权重:
+```python
+# weight_norm 分解存储
+weight_g: (1024, 1, 1)  # magnitude
+weight_v: (1024, 8, 1)  # direction
+
+# 实际权重 = g * v / ||v||
+actual_weight = weight_g * weight_v / weight_v.norm(dim=1, keepdim=True)
+```
+
+**MLX 实现**:
+```python
+def _vq2emb_forward(self, codes: mx.array) -> mx.array:
+    # Embedding lookup
+    emb = self._vq2emb_codebook[codes]  # (B, T, 8)
+
+    # Linear projection (kernel_size=1 Conv1d)
+    out = emb @ self._vq2emb_weight_2d.T + self._vq2emb_bias  # (B, T, 1024)
+
+    # Transpose to (B, 1024, T)
+    return out.transpose(0, 2, 1)
+```
+
+**效果**:
+| 场景 | 优化前 | 优化后 | 提升 |
+|------|--------|--------|------|
+| v2.0 + .npz 加载 | 4.05s | **1.48s** | **63% 减少** |
+
+**文件**: `models/mlx-indexTTS-2.0/vq2emb.safetensors` (0.28MB)
+
+### 2. Speaker 预计算 (.npz)
+
+**功能**: 预计算所有 speaker conditioning，跳过 W2V-BERT/CAMPPlus/SemanticCodec 加载
+
+**v2.0 npz 内容**:
+- `spk_cond_emb`: W2V-BERT 特征
+- `S_ref`: Semantic codes
+- `ref_mel`: Reference mel spectrogram
+- `style`: CAMPPlus speaker embedding
+- `prompt_condition`: Length regulator output
+
+**版本兼容**: npz 文件包含版本号，v1.5 和 v2.0 不兼容:
+```python
+# 保存时
+np.savez(output_path, version=np.array([2.0]), ...)
+
+# 加载时检查
+version = float(data['version'][0])
+if version < 2.0:
+    raise ValueError("Speaker file is v1.5 format")
+```
+

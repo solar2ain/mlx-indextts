@@ -200,6 +200,59 @@ def convert_bigvgan_v2_weights(weights: Dict[str, np.ndarray]) -> Dict[str, mx.a
     return new_weights
 
 
+def export_vq2emb_weights(cfg) -> Dict[str, mx.array]:
+    """Export vq2emb weights from Semantic Codec.
+
+    vq2emb converts mel codes to embeddings using:
+    1. Codebook embedding lookup (8192 -> 8)
+    2. Linear projection via Conv1d kernel_size=1 (8 -> 1024)
+
+    The Conv1d uses weight_norm, so we compute the actual weight as:
+        weight = weight_g * weight_v / ||weight_v||
+
+    Args:
+        cfg: OmegaConf config containing semantic_codec config
+
+    Returns:
+        Dict with keys: codebook.weight, out_project.weight, out_project.bias
+    """
+    import torch
+    import safetensors.torch
+    from huggingface_hub import hf_hub_download
+    from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_codec
+
+    # Build semantic codec
+    semantic_codec = build_semantic_codec(cfg.semantic_codec)
+
+    # Load weights from HuggingFace
+    ckpt_path = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
+    safetensors.torch.load_model(semantic_codec, ckpt_path)
+    semantic_codec.eval()
+
+    # Get the quantizer (single FVQ with num_quantizers=1)
+    quantizer = semantic_codec.quantizer.quantizers[0]
+
+    # Extract weights with weight_norm properly applied
+    # weight_norm stores weight_g and weight_v, actual weight = g * v / ||v||
+    weight_g = quantizer.out_project.weight_g.detach()  # (1024, 1, 1)
+    weight_v = quantizer.out_project.weight_v.detach()  # (1024, 8, 1)
+    norm = weight_v.norm(dim=1, keepdim=True)  # L2 norm over in_channels
+    actual_weight = weight_g * weight_v / norm  # (1024, 8, 1)
+
+    # Codebook and bias
+    codebook = quantizer.codebook.weight.detach()  # (8192, 8)
+    bias = quantizer.out_project.bias.detach()  # (1024,)
+
+    # Convert to MLX
+    weights = {
+        "codebook.weight": mx.array(codebook.numpy()),
+        "out_project.weight": mx.array(actual_weight.numpy()),
+        "out_project.bias": mx.array(bias.numpy()),
+    }
+
+    return weights
+
+
 def convert_model(
     model_dir: Union[str, Path],
     output_dir: Union[str, Path],
@@ -297,19 +350,26 @@ def convert_model(
     mx.save_safetensors(str(bigvgan_output), bigvgan_weights)
     print(f"  Saved {len(bigvgan_weights)} tensors to {bigvgan_output}")
 
-    # 4. Copy BPE model
+    # 4. Export vq2emb weights from Semantic Codec
+    print(f"\n[4/5] Exporting vq2emb weights from Semantic Codec...")
+    vq2emb_weights = export_vq2emb_weights(cfg)
+    vq2emb_output = output_dir / "vq2emb.safetensors"
+    mx.save_safetensors(str(vq2emb_output), vq2emb_weights)
+    print(f"  Saved {len(vq2emb_weights)} tensors to {vq2emb_output}")
+
+    # 5. Copy BPE model
     bpe_path = model_dir / cfg.dataset.bpe_model
     if bpe_path.exists():
         shutil.copy(bpe_path, output_dir / "tokenizer.model")
         print(f"\nCopied BPE model to {output_dir / 'tokenizer.model'}")
 
-    # 5. Copy config.yaml (needed for OmegaConf loading)
+    # 6. Copy config.yaml (needed for OmegaConf loading)
     config_yaml_src = config_path if config_path else model_dir / "config.yaml"
     if Path(config_yaml_src).exists():
         shutil.copy(config_yaml_src, output_dir / "config.yaml")
         print(f"Copied config.yaml to {output_dir / 'config.yaml'}")
 
-    # 6. Save config as JSON (for reference)
+    # 7. Save config as JSON (for reference)
     config_output = output_dir / "config.json"
     config_dict = config.to_dict()
     config_dict["version"] = 2.0
@@ -332,14 +392,14 @@ def convert_model(
         json.dump(config_dict, f, indent=2, default=str)
     print(f"Saved config to {config_output}")
 
-    # 7. Copy emotion matrices if present
+    # 8. Copy emotion matrices if present
     for feat_file in ["feat1.pt", "feat2.pt"]:
         feat_path = model_dir / feat_file
         if feat_path.exists():
             shutil.copy(feat_path, output_dir / feat_file)
             print(f"Copied {feat_file} to {output_dir / feat_file}")
 
-    # 8. Copy w2v stats file
+    # 9. Copy w2v stats file
     w2v_stat_path = model_dir / cfg.w2v_stat
     if w2v_stat_path.exists():
         shutil.copy(w2v_stat_path, output_dir / w2v_stat_path.name)

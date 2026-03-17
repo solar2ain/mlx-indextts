@@ -5,7 +5,7 @@ IndexTTS for Apple Silicon using MLX. Zero-shot text-to-speech with voice clonin
 ## Features
 
 - Run IndexTTS 1.5/2.0 natively on Apple Silicon
-- RTF ~0.5 (2x faster than real-time on M3 Pro)
+- RTF ~0.5 (2x faster than real-time on M2 Max)
 - Voice cloning from reference audio
 - **v2.0**: Emotion control (8 emotions)
 - Auto-detect model version (1.5/2.0)
@@ -75,21 +75,32 @@ uv run mlx-indextts generate \
     --emotion happy --emo-alpha 0.8
 ```
 
-### 3. Pre-compute Speaker (v1.5 only)
+### 3. Pre-compute Speaker (Faster Inference)
+
+Pre-compute speaker conditioning to skip audio preprocessing on subsequent generations.
 
 ```bash
+# v1.5
 uv run mlx-indextts speaker \
     -m models/mlx-indexTTS-1.5 \
     -r reference.wav \
-    -o speaker.npz
+    -o speaker_v15.npz
 
-# Use pre-computed speaker
+# v2.0
+uv run mlx-indextts speaker \
+    -m models/mlx-indexTTS-2.0 \
+    -r reference.wav \
+    -o speaker_v20.npz
+
+# Use pre-computed speaker (much faster loading)
 uv run mlx-indextts generate \
-    -m models/mlx-indexTTS-1.5 \
-    -r speaker.npz \
+    -m models/mlx-indexTTS-2.0 \
+    -r speaker_v20.npz \
     -t "你好，世界！" \
     -o output.wav
 ```
+
+**Note**: v1.5 and v2.0 speaker files are incompatible - each version requires its own .npz file.
 
 ## Python API
 
@@ -149,6 +160,7 @@ v2.0 only:
 | S2Mel (CFM) | ❌ | ✅ |
 | BigVGAN | Custom | nvidia pretrained |
 | Runtime quantization | ✅ | ✅ |
+| Speaker pre-compute | ✅ | ✅ |
 
 ## Supported Emotions (v2.0)
 
@@ -170,6 +182,8 @@ Mixed emotions: `--emotion "happy:0.6,sad:0.4"`
 | Metric | v1.5 | v2.0 |
 |--------|------|------|
 | RTF (M2 Max) | ~0.5 | ~1.3 |
+| Load time (.wav) | ~0.3s | ~9s |
+| Load time (.npz) | ~0.3s | ~1.5s |
 
 ## License
 

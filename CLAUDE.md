@@ -83,7 +83,9 @@ mlx-indextts/
 | 情感控制 | ❌ | ✅ 8类 |
 | S2Mel (CFM) | ❌ | ✅ |
 | 运行时量化 | ✅ | ✅ |
+| Speaker 预计算 | ✅ | ✅ |
 | RTF (M2 Max) | ~0.5 | ~1.3 |
+| 加载时间 (.npz) | ~0.3s | ~1.5s |
 
 ## 参考资源
 - PyTorch 原始项目: `~/Projects/index-tts`
@@ -131,6 +133,7 @@ models/mlx-indexTTS-2.0/
 ├── gpt.safetensors        (3.3GB)
 ├── s2mel.safetensors      (395MB)
 ├── bigvgan.safetensors    (428MB)
+├── vq2emb.safetensors     (0.3MB)  # MLX vq2emb
 ├── tokenizer.model
 ├── config.json
 ├── feat1.pt               (spk_matrix)
