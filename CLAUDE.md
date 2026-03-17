@@ -71,7 +71,7 @@ mlx-indextts/
 ├── ref_audios/              # 参考音频
 └── docs/
     ├── indextts_1.5_alignment.md  # 1.5 踩坑经验
-    └── indextts_2.0_progress.md   # 2.0 总结
+    └── indextts_2.0_alignment.md  # 2.0 踩坑经验
 ```
 
 ## 版本差异

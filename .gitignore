@@ -46,6 +46,7 @@ ref_audios/
 /tmp/
 
 # Test outputs
+test_outputs/
 .pytest_cache/
 .coverage
 htmlcov/
