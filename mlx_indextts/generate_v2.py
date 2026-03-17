@@ -597,8 +597,6 @@ class IndexTTSv2:
         start_time = time.perf_counter()
 
         # 1. Process reference audio (PyTorch preprocessing)
-        if verbose:
-            print("Processing reference audio...")
         ref_data = self._process_reference_audio(reference_audio)
         spk_cond_emb_pt = ref_data['spk_cond_emb']  # PyTorch tensor
         style_pt = ref_data['style']
@@ -611,17 +609,12 @@ class IndexTTSv2:
         spk_cond_emb_ncl = spk_cond_emb.transpose(0, 2, 1)
 
         # 2. Tokenize text
-        if verbose:
-            print("Tokenizing text...")
         text_tokens = self.tokenizer.encode(text)
         text_tokens = mx.array([text_tokens], dtype=mx.int32)
         if verbose:
             print(f"Text tokens: {text_tokens.shape[1]}")
 
         # 3. GPT conditioning (MLX)
-        if verbose:
-            print("Getting GPT conditioning...")
-
         # Speaker conditioning
         cond_lengths = mx.array([spk_cond_emb.shape[1]])
         speech_cond = self.gpt.get_conditioning(spk_cond_emb_ncl, cond_lengths)
@@ -657,8 +650,6 @@ class IndexTTSv2:
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 
         # 4. GPT autoregressive generation (MLX)
-        if verbose:
-            print("GPT generation (MLX)...")
         gpt_start = time.perf_counter()
 
         # Prepare inputs
@@ -701,30 +692,23 @@ class IndexTTSv2:
             mel_codes.append(token_id)
             mx.eval(cache)
 
-            if verbose and (i + 1) % 100 == 0:
+            if verbose and (i + 1) % 50 == 0:
                 print(f"Generated {i + 1} mel tokens...")
 
         gpt_gen_time = time.perf_counter() - gpt_start
         if verbose:
-            print(f"Generated {len(mel_codes)} codes in {gpt_gen_time:.2f}s")
+            print(f"Generated {len(mel_codes)} mel tokens")
 
         if len(mel_codes) == 0:
             raise RuntimeError("No mel tokens generated")
 
         # 5. GPT forward to get latent (MLX)
-        if verbose:
-            print("GPT forward (getting latent)...")
-        gpt_fwd_start = time.perf_counter()
+        s2mel_start = time.perf_counter()
 
         mel_codes_tensor = mx.array([mel_codes], dtype=mx.int32)
         latent = self.gpt.forward_latent(conditioning, text_tokens, mel_codes_tensor)
 
-        gpt_fwd_time = time.perf_counter() - gpt_fwd_start
-
         # 6. S2Mel processing
-        if verbose:
-            print("S2Mel processing...")
-        s2mel_start = time.perf_counter()
 
         # gpt_layer projection (MLX)
         latent = self.s2mel_mlx.gpt_layer(latent)
@@ -749,9 +733,6 @@ class IndexTTSv2:
         cat_condition = mx.concatenate([prompt_condition, cond], axis=1)
 
         # 7. CFM inference (MLX)
-        if verbose:
-            print("CFM inference (MLX)...")
-
         ref_mel = mx.array(ref_mel_pt.cpu().numpy())
         style = mx.array(style_pt.cpu().numpy())
         x_lens = mx.array([cat_condition.shape[1]])
@@ -774,12 +755,7 @@ class IndexTTSv2:
         prompt_len = ref_mel.shape[-1]
         mel_out = mel_out[:, :, prompt_len:]
 
-        if verbose:
-            print(f"Generated mel shape: {mel_out.shape}")
-
         # 8. BigVGAN vocoder (MLX)
-        if verbose:
-            print("BigVGAN synthesis (MLX)...")
         vocoder_start = time.perf_counter()
 
         audio_out = self.bigvgan_mlx(mel_out)
@@ -794,11 +770,9 @@ class IndexTTSv2:
         audio_duration = len(audio) / 22050
 
         if verbose:
-            print(f"\nGeneration complete!")
-            print(f"Audio duration: {audio_duration:.2f}s")
-            print(f"Total time: {total_time:.2f}s (RTF: {total_time/audio_duration:.2f})")
+            rtf = total_time / audio_duration
+            print(f"Generated {audio_duration:.2f}s audio in {total_time:.2f}s (RTF: {rtf:.3f})")
             print(f"  GPT gen: {gpt_gen_time:.2f}s")
-            print(f"  GPT fwd: {gpt_fwd_time:.2f}s")
             print(f"  S2Mel: {s2mel_time:.2f}s")
             print(f"  BigVGAN: {vocoder_time:.2f}s")
 
@@ -806,8 +780,6 @@ class IndexTTSv2:
         if output_path:
             import soundfile as sf
             sf.write(output_path, audio, 22050)
-            if verbose:
-                print(f"Audio saved to {output_path}")
 
         return audio
 
