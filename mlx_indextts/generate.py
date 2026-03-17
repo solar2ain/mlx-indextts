@@ -311,9 +311,12 @@ class IndexTTS:
                 # Only feed the last token
                 last_token = mx.array([[mel_codes[-1]]], dtype=mx.int32)
                 last_emb = self.gpt.mel_embedding(last_token)
-                # Mel position is relative to start_mel_token (position 0)
-                # First generated token is position 1, second is 2, etc.
-                mel_pos = len(mel_codes)
+                # Position calculation matches PyTorch: attention_mask.shape[1] - mel_len
+                # In PyTorch: mel_len = inputs_embeds.shape[1] (without start_mel_token)
+                #             attention_mask starts at mel_len + 1, grows by 1 each step
+                # So position for first generated token = (mel_len + 2) - mel_len = 2
+                # Position = len(mel_codes) + 1 (since mel_codes[0] is at position 2)
+                mel_pos = len(mel_codes) + 1
                 last_emb = last_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(mel_pos)
                 next_token, _, cache = self.gpt.generate_step(
                     last_emb, cache, temperature, top_k, top_p

@@ -7,7 +7,7 @@ from typing import List, Optional
 @dataclass
 class ConformerConfig:
     """Configuration for Conformer encoder."""
-    input_size: int = 100
+    input_size: int = 100  # mel bands for 1.5, 1024 for 2.0 (W2V-BERT)
     output_size: int = 512
     linear_units: int = 2048
     attention_heads: int = 8
@@ -47,6 +47,8 @@ class GPTConfig:
 
     # Conformer config (nested)
     condition_module: Optional[ConformerConfig] = None
+    # Emotion condition module (for v2)
+    emo_condition_module: Optional[ConformerConfig] = None
 
     def __post_init__(self):
         if self.condition_module is None:
@@ -129,10 +131,12 @@ class IndexTTSConfig:
         # Parse nested configs
         gpt_data = data.get("gpt", {}).copy()
         condition_module_data = gpt_data.pop("condition_module", {})
+        emo_condition_module_data = gpt_data.pop("emo_condition_module", {})
 
         gpt_config = GPTConfig(
             **filter_fields(gpt_data, GPTConfig),
-            condition_module=ConformerConfig(**filter_fields(condition_module_data, ConformerConfig)) if condition_module_data else None
+            condition_module=ConformerConfig(**filter_fields(condition_module_data, ConformerConfig)) if condition_module_data else None,
+            emo_condition_module=ConformerConfig(**filter_fields(emo_condition_module_data, ConformerConfig)) if emo_condition_module_data else None,
         )
 
         bigvgan_config = BigVGANConfig(**filter_fields(data.get("bigvgan", {}), BigVGANConfig))
@@ -155,3 +159,59 @@ class IndexTTSConfig:
         """Convert config to dictionary."""
         import dataclasses
         return dataclasses.asdict(self)
+
+    @classmethod
+    def from_omegaconf(cls, cfg) -> "IndexTTSConfig":
+        """Load configuration from OmegaConf object (IndexTTS 2.0 config).
+
+        Args:
+            cfg: OmegaConf object loaded from config.yaml
+
+        Returns:
+            IndexTTSConfig instance
+        """
+        from omegaconf import OmegaConf
+        import dataclasses
+
+        # Helper to filter dict to only known fields
+        def filter_fields(data_dict: dict, dataclass_type) -> dict:
+            known_fields = {f.name for f in dataclasses.fields(dataclass_type)}
+            return {k: v for k, v in data_dict.items() if k in known_fields}
+
+        # Convert OmegaConf to dict
+        gpt_data = OmegaConf.to_container(cfg.gpt, resolve=True)
+        condition_module_data = gpt_data.pop("condition_module", {})
+        emo_condition_module_data = gpt_data.pop("emo_condition_module", {})
+
+        gpt_config = GPTConfig(
+            **filter_fields(gpt_data, GPTConfig),
+            condition_module=ConformerConfig(**filter_fields(condition_module_data, ConformerConfig)) if condition_module_data else None,
+            emo_condition_module=ConformerConfig(**filter_fields(emo_condition_module_data, ConformerConfig)) if emo_condition_module_data else None,
+        )
+
+        # BigVGAN config (v2 doesn't have bigvgan in config, use defaults)
+        bigvgan_config = BigVGANConfig()
+
+        # Mel config from s2mel preprocess params
+        if hasattr(cfg, 's2mel') and hasattr(cfg.s2mel, 'preprocess_params'):
+            mel_data = {
+                'sample_rate': cfg.s2mel.preprocess_params.sr,
+                'n_fft': cfg.s2mel.preprocess_params.spect_params.n_fft,
+                'hop_length': cfg.s2mel.preprocess_params.spect_params.hop_length,
+                'win_length': cfg.s2mel.preprocess_params.spect_params.win_length,
+                'n_mels': cfg.s2mel.preprocess_params.spect_params.n_mels,
+            }
+            mel_config = MelConfig(**filter_fields(mel_data, MelConfig))
+        else:
+            mel_config = MelConfig()
+
+        return cls(
+            gpt=gpt_config,
+            bigvgan=bigvgan_config,
+            mel=mel_config,
+            bpe_model=cfg.dataset.bpe_model if hasattr(cfg, 'dataset') else "bpe.model",
+            gpt_checkpoint=cfg.gpt_checkpoint if hasattr(cfg, 'gpt_checkpoint') else "gpt.pth",
+            bigvgan_checkpoint="",  # v2 uses external BigVGAN
+            version=cfg.version if hasattr(cfg, 'version') else 2.0,
+            sample_rate=cfg.s2mel.preprocess_params.sr if hasattr(cfg, 's2mel') else 22050,
+        )

@@ -72,6 +72,7 @@ def convert_gpt_weights(weights: Dict[str, np.ndarray], config: IndexTTSConfig) 
         # Handle conditioning_encoder.embed naming differences
         # PyTorch: embed.conv.0 (single Conv2d in Sequential) -> MLX: embed.conv
         # PyTorch: embed.out.0 (Linear in Sequential) -> MLX: embed.out
+        # Works for both conditioning_encoder and emo_conditioning_encoder
         if "conditioning_encoder.embed.conv.0." in key:
             new_key = new_key.replace("embed.conv.0.", "embed.conv.")
         if "conditioning_encoder.embed.out.0." in key:
@@ -97,8 +98,8 @@ def convert_gpt_weights(weights: Dict[str, np.ndarray], config: IndexTTSConfig) 
             elif f"gpt.h.{i}.mlp.c_proj.weight" in key:
                 value = value.T
 
-        # Handle perceiver weights
-        if "perceiver_encoder" in key:
+        # Handle perceiver weights (both spk and emo)
+        if "perceiver_encoder" in key or "emo_perceiver_encoder" in key:
             # to_q -> linear_q
             new_key = new_key.replace("to_q.", "linear_q.")
             # to_out -> linear_out

@@ -187,12 +187,19 @@ class GPT2Model(nn.Module):
             Output hidden states and updated cache
         """
         x = inputs_embeds
-        seq_len = x.shape[1]
+        query_len = x.shape[1]
         new_cache = []
+
+        # Calculate key length (includes cached tokens if any)
+        if cache is not None and cache[0] is not None:
+            cache_len = cache[0][0].shape[1]  # K cache shape: (batch, cache_len, dim)
+            key_len = cache_len + query_len
+        else:
+            key_len = query_len
 
         # Create causal mask if not provided (GPT-2 is autoregressive)
         if mask is None:
-            mask = self.create_causal_mask(seq_len)
+            mask = self.create_causal_mask(query_len, key_len)
 
         for i, block in enumerate(self.h):
             layer_cache = cache[i] if cache is not None else None
@@ -203,18 +210,39 @@ class GPT2Model(nn.Module):
 
         return x, new_cache
 
-    def create_causal_mask(self, seq_len: int) -> mx.array:
+    def create_causal_mask(self, query_len: int, key_len: int) -> mx.array:
         """Create causal attention mask.
 
+        For autoregressive generation with KV cache:
+        - query_len: length of current input (1 during generation)
+        - key_len: total length including cached keys (cache_len + query_len)
+
         Args:
-            seq_len: Sequence length
+            query_len: Query sequence length
+            key_len: Key sequence length (may be larger due to cache)
 
         Returns:
-            Causal mask of shape (1, 1, seq_len, seq_len)
+            Causal mask of shape (1, 1, query_len, key_len)
             Where positions that should NOT be attended have -inf
         """
-        # Create upper triangular mask (1s above diagonal)
-        mask = mx.triu(mx.ones((seq_len, seq_len)), k=1)
+        # Create mask where each query position can only attend to
+        # key positions up to and including itself
+        # For incremental decoding: query at position i attends to keys 0..i
+        #
+        # With cache, if we're at step N (cache has N tokens, query_len=1):
+        # - key_len = N + 1
+        # - We want mask shape (1, key_len) = (1, N+1) all zeros (can attend to all)
+        #
+        # Without cache (initial forward, query_len = key_len = S):
+        # - Standard lower triangular mask
+        if query_len == key_len:
+            # Standard causal mask for initial forward pass
+            mask = mx.triu(mx.ones((query_len, key_len)), k=1)
+        else:
+            # Incremental decoding: query can attend to all keys
+            # (causal constraint is already satisfied by only having past keys in cache)
+            mask = mx.zeros((query_len, key_len))
+
         # Convert to additive mask: 0 -> 0, 1 -> -inf
         mask = mx.where(mask > 0, float("-inf"), 0.0)
         return mask[None, None, :, :]
