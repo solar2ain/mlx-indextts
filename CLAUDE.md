@@ -82,7 +82,8 @@ mlx-indextts/
 | 采样率 | 24000 Hz | 22050 Hz |
 | 情感控制 | ❌ | ✅ 8类 |
 | S2Mel (CFM) | ❌ | ✅ |
-| 运行时量化 | ✅ | ❌ |
+| 运行时量化 | ✅ | ✅ |
+| RTF (M2 Max) | ~0.5 | ~1.3 |
 
 ## 参考资源
 - PyTorch 原始项目: `~/Projects/index-tts`

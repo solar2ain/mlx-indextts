@@ -30,6 +30,14 @@ def convert_command(args):
     model_dir = Path(args.model_dir)
     version = detect_pytorch_version(model_dir)
 
+    # Parse quantize option
+    quantize_bits = None
+    if args.quantize:
+        if args.quantize.lower() == "fp32":
+            quantize_bits = None
+        else:
+            quantize_bits = int(args.quantize)
+
     print(f"Detected IndexTTS version: {version}")
 
     if version == "2.0":
@@ -38,17 +46,10 @@ def convert_command(args):
             model_dir=args.model_dir,
             output_dir=args.output,
             config_path=args.config,
+            quantize_bits=quantize_bits,
         )
     else:
         from mlx_indextts.convert import convert_model
-
-        # Parse quantize option
-        quantize_bits = None
-        if args.quantize:
-            if args.quantize.lower() == "fp32":
-                quantize_bits = None
-            else:
-                quantize_bits = int(args.quantize)
 
         convert_model(
             model_dir=args.model_dir,
@@ -93,6 +94,14 @@ def generate_command(args):
     if memory_limit is None:
         memory_limit = 12.0 if version == "2.0" else 8.0
 
+    # Parse quantize option
+    quantize_bits = None
+    if args.quantize:
+        if args.quantize.lower() == "fp32":
+            quantize_bits = None
+        else:
+            quantize_bits = int(args.quantize)
+
     print(f"Using IndexTTS {version}")
 
     if version == "2.0":
@@ -101,6 +110,7 @@ def generate_command(args):
         tts = IndexTTSv2(
             model_dir=args.model,
             memory_limit_gb=memory_limit,
+            quantize_bits=quantize_bits,
         )
 
         audio = tts.generate(
@@ -120,14 +130,6 @@ def generate_command(args):
         )
     else:
         from mlx_indextts.generate import IndexTTS
-
-        # Parse quantize option
-        quantize_bits = None
-        if args.quantize:
-            if args.quantize.lower() == "fp32":
-                quantize_bits = None
-            else:
-                quantize_bits = int(args.quantize)
 
         tts = IndexTTS.load_model(
             args.model,
@@ -215,7 +217,7 @@ def main():
         "-q",
         type=str,
         default="fp32",
-        help="Quantization bits: 4, 8, or fp32 (v1.5 only, default: fp32)",
+        help="Quantization bits: 4, 8, or fp32 (GPT only, default: fp32)",
     )
     convert_parser.set_defaults(func=convert_command)
 
@@ -306,7 +308,7 @@ def main():
         "-q",
         type=str,
         default="fp32",
-        help="[v1.5 only] 运行时量化: 4, 8, 或 fp32 (default: fp32)",
+        help="运行时量化 (GPT only): 4, 8, 或 fp32 (default: fp32)",
     )
     # v2.0 specific options
     generate_parser.add_argument(

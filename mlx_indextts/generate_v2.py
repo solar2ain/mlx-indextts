@@ -106,6 +106,7 @@ class IndexTTSv2:
         device: str = "mps",
         mlx_model_dir: Optional[str] = None,
         memory_limit_gb: float = 0,
+        quantize_bits: Optional[int] = None,
     ):
         """Initialize IndexTTS 2.0.
 
@@ -115,6 +116,7 @@ class IndexTTSv2:
             device: PyTorch device for preprocessing (mps, cuda, cpu)
             mlx_model_dir: Alias for model_dir (for backwards compatibility)
             memory_limit_gb: GPU memory limit in GB (0 = no limit)
+            quantize_bits: Runtime quantization bits for GPT (4 or 8), None for no quantization
         """
         # Set memory limit if specified
         if memory_limit_gb > 0:
@@ -122,6 +124,7 @@ class IndexTTSv2:
 
         self.model_dir = Path(model_dir)
         self.device = device
+        self.quantize_bits = quantize_bits
 
         # mlx_model_dir is same as model_dir in unified structure
         self.mlx_model_dir = Path(mlx_model_dir) if mlx_model_dir else self.model_dir
@@ -264,6 +267,7 @@ class IndexTTSv2:
 
     def _init_mlx_models(self):
         """Initialize MLX models."""
+        import mlx.nn as nn
         from mlx_indextts.config import IndexTTSConfig
         from mlx_indextts.models.gpt_v2 import UnifiedVoiceV2
         from mlx_indextts.models.s2mel import S2Mel
@@ -272,14 +276,37 @@ class IndexTTSv2:
         # Build config from OmegaConf
         config = IndexTTSConfig.from_omegaconf(self.cfg)
 
+        # Check if model was pre-quantized
+        config_json_path = self.mlx_model_dir / "config.json"
+        saved_quantize_bits = None
+        if config_json_path.exists():
+            import json
+            with open(config_json_path) as f:
+                config_dict = json.load(f)
+                saved_quantize_bits = config_dict.get("quantize_bits")
+
+        # Determine effective quantization
+        effective_quantize = saved_quantize_bits or self.quantize_bits
+
         # GPT v2 (MLX)
         print("Loading GPT v2 (MLX)...")
         self.gpt = UnifiedVoiceV2(config)
+
+        # If model was saved with quantization, quantize before loading weights
+        if saved_quantize_bits:
+            print(f"  Model pre-quantized to {saved_quantize_bits}-bit")
+            nn.quantize(self.gpt.gpt, bits=saved_quantize_bits, group_size=64)
+
         if Path(self.gpt_weights_path).exists():
             self.gpt.load_weights(self.gpt_weights_path)
             print(f"GPT v2 (MLX) loaded from {self.gpt_weights_path}")
         else:
             print(f"Warning: GPT v2 weights not found at {self.gpt_weights_path}")
+
+        # If runtime quantization requested (and model wasn't pre-quantized)
+        if self.quantize_bits and not saved_quantize_bits:
+            print(f"  Applying runtime {self.quantize_bits}-bit quantization to GPT...")
+            nn.quantize(self.gpt.gpt, bits=self.quantize_bits, group_size=64)
 
         # S2Mel (MLX) - we only use CFM part for inference
         print("Loading S2Mel (MLX)...")

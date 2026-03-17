@@ -20,7 +20,7 @@ import mlx.core as mx
 import numpy as np
 
 from mlx_indextts.config import IndexTTSConfig
-from mlx_indextts.convert import load_pytorch_weights, convert_gpt_weights
+from mlx_indextts.convert import load_pytorch_weights, convert_gpt_weights, _quantize_weights
 
 
 def convert_gpt_v2_weights(weights: Dict[str, np.ndarray], config: IndexTTSConfig) -> Dict[str, mx.array]:
@@ -204,6 +204,7 @@ def convert_model(
     model_dir: Union[str, Path],
     output_dir: Union[str, Path],
     config_path: Optional[Union[str, Path]] = None,
+    quantize_bits: Optional[int] = None,
 ) -> None:
     """Convert IndexTTS 2.0 PyTorch model to MLX format.
 
@@ -213,6 +214,7 @@ def convert_model(
         model_dir: Directory containing PyTorch checkpoints (indexTTS-2)
         output_dir: Output directory for MLX weights
         config_path: Optional path to config.yaml
+        quantize_bits: Quantization bits for GPT (4 or 8), None for fp32
     """
     import torch
     from huggingface_hub import hf_hub_download
@@ -231,6 +233,10 @@ def convert_model(
 
     print(f"Converting IndexTTS 2.0 model from {model_dir}")
     print(f"Output directory: {output_dir}")
+    if quantize_bits:
+        print(f"Quantization: {quantize_bits}-bit (GPT only)")
+    else:
+        print(f"Quantization: None (fp32)")
 
     # 1. Convert GPT v2 weights
     gpt_path = model_dir / "gpt.pth"
@@ -238,6 +244,12 @@ def convert_model(
         print(f"\n[1/3] Converting GPT v2 weights from {gpt_path}...")
         gpt_numpy = load_pytorch_weights(gpt_path)
         gpt_weights = convert_gpt_v2_weights(gpt_numpy, config)
+
+        # Apply quantization if requested
+        if quantize_bits:
+            print(f"  Quantizing GPT to {quantize_bits}-bit...")
+            gpt_weights = _quantize_weights(gpt_weights, config, quantize_bits)
+
         gpt_output = output_dir / "gpt.safetensors"
         mx.save_safetensors(str(gpt_output), gpt_weights)
         print(f"  Saved {len(gpt_weights)} tensors to {gpt_output}")
@@ -302,6 +314,10 @@ def convert_model(
     config_dict = config.to_dict()
     config_dict["version"] = 2.0
     config_dict["sample_rate"] = cfg.s2mel.preprocess_params.sr
+
+    # Save quantization info
+    if quantize_bits:
+        config_dict["quantize_bits"] = quantize_bits
 
     # Save S2Mel specific config
     config_dict["s2mel"] = {

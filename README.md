@@ -130,8 +130,6 @@ Common options:
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
-
-v1.5 only:
   --quantize, -q     Runtime quantization: 4, 8, or fp32
 
 v2.0 only:
@@ -150,7 +148,7 @@ v2.0 only:
 | Emotion control | ❌ | ✅ 8 emotions |
 | S2Mel (CFM) | ❌ | ✅ |
 | BigVGAN | Custom | nvidia pretrained |
-| Runtime quantization | ✅ | ❌ |
+| Runtime quantization | ✅ | ✅ |
 
 ## Supported Emotions (v2.0)
 
@@ -171,7 +169,7 @@ Mixed emotions: `--emotion "happy:0.6,sad:0.4"`
 
 | Metric | v1.5 | v2.0 |
 |--------|------|------|
-| RTF (M3 Pro) | ~0.5 | ~1.3 |
+| RTF (M2 Max) | ~0.5 | ~1.3 |
 
 ## License
 
