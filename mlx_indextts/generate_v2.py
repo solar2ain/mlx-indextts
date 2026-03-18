@@ -826,35 +826,31 @@ class IndexTTSv2:
             else:
                 emotion_weights = emotion
 
+            # PyTorch pre-scales emotion weights by emo_alpha (infer_v2.py:414-418)
+            emo_scale = max(0.0, min(1.0, emo_alpha))
+            if emo_scale != 1.0:
+                emotion_weights = {k: v * emo_scale for k, v in emotion_weights.items()}
+
             if verbose:
                 print(f"Using specified emotion: {emotion_weights}")
 
-            # Compute target emotion vector from emo_matrix based on the specified weights
-            target_emo_vec_pt = self._compute_emotion_vector(emotion_weights, style_pt)
-            # Apply the same processing as get_emovec: emovec_layer + emo_layer
-            target_emo_vec_mx = mx.array(target_emo_vec_pt.cpu().numpy())
-            target_emo_vec = self.gpt.emo_layer(target_emo_vec_mx)
+            # Compute emovec_mat from emo_matrix (feat2.pt) using scaled weights.
+            # In PyTorch, emovec_mat is used DIRECTLY without any projection layers.
+            # It's already in model_dim (1280) space from feat2.pt.
+            emovec_mat_pt = self._compute_emotion_vector(emotion_weights, style_pt)
+            emovec_mat = mx.array(emovec_mat_pt.cpu().numpy())
 
-            # Get the sum of emotion weights
+            # PyTorch formula (infer_v2.py:561):
+            #   emovec = emovec_mat + (1 - sum(weight_vector)) * emovec
+            # where emovec = get_emovec(spk) = emovec_layer + emo_layer on speaker audio
             weight_sum = sum(emotion_weights.get(cat, 0.0) for cat in EMOTION_CATEGORIES)
-
-            # In PyTorch implementation, when custom emotion vectors are provided,
-            # they blend: custom_emo_vector + (1 - sum_weights) * base_emo_vec
-            # where base_emo_vec is the emotion from the speaker reference
             if weight_sum >= 1.0:
-                # If emotion weights sum to 1.0 or more, use just the custom emotion vector
-                emo_vec = target_emo_vec
+                emo_vec = emovec_mat
             else:
-                # Blend: custom emotion vector + residual of base emotion vector
-                # This follows PyTorch logic: emovec_mat + (1 - sum(weight_vector)) * emovec
-                emo_vec = target_emo_vec + (1.0 - weight_sum) * base_emo_vec
+                emo_vec = emovec_mat + (1.0 - weight_sum) * base_emo_vec
         else:
-            # No custom emotion specified, use reference audio emotion
-            # The emo_alpha parameter controls the blend between speaker reference and emotion reference
-            # Since we only have one reference audio (speaker), apply emo_alpha to adjust emotion intensity
-            # This simulates the effect of having separate speaker and emotion references
-            # For consistency with PyTorch's interface, we interpret emo_alpha as controlling emotion intensity
-            # when only one reference is provided
+            # No custom emotion specified, use reference audio emotion as-is.
+            # PyTorch sets emo_alpha=1.0 when no separate emotion audio (infer_v2.py:424-425).
             emo_vec = base_emo_vec
         # Prepare full conditioning (speaker + emotion + speed)
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
