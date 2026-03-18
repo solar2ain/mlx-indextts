@@ -259,10 +259,27 @@ def run_pytorch_v20(text: str, output: str, emotion: Optional[str] = None, emo_a
     model_dir = PYTORCH_PROJECT / "indexTTS-2"
     cfg_path = model_dir / "config.yaml"
 
-    # Build emotion args
+    # Build emotion args - PyTorch uses emo_vector as an array of 8 values in fixed order
+    # Emotion order: happy, angry, sad, afraid, disgusted, melancholic, surprised, calm
     emotion_args = ""
     if emotion:
-        emotion_args = f', emotion="{emotion}", emo_alpha={emo_alpha}'
+        # Convert emotion string to corresponding vector (8 values in order)
+        emotion_mapping = {
+            "happy": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],      # happy
+            "angry": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],      # angry
+            "sad": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],        # sad
+            "afraid": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],     # afraid
+            "disgusted": [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],  # disgusted
+            "melancholic": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0], # melancholic
+            "surprised": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # surprised
+            "calm": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]        # calm
+        }
+        if emotion in emotion_mapping:
+            emo_vector = emotion_mapping[emotion]
+            emotion_args = f', emo_vector={emo_vector}, emo_alpha={emo_alpha}'
+        else:
+            # For unknown emotions, use calm as default
+            emotion_args = f', emo_vector=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], emo_alpha={emo_alpha}'
 
     script = f'''
 import sys
@@ -401,10 +418,10 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
     result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
     results.append(result)
 
-    for emotion in ["happy", "sad"]:
+    for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
         print(f"\n--- MLX Emotion: {emotion} ---")
         output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
-        result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=0.8, use_speaker_cache=use_speaker_cache)
+        result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=1.0, use_speaker_cache=use_speaker_cache)
         results.append(result)
 
     # PyTorch tests
@@ -414,10 +431,10 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
         result = run_pytorch_v20(test_text, output)
         results.append(result)
 
-        for emotion in ["happy", "sad"]:
+        for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
             print(f"\n--- PyTorch Emotion: {emotion} ---")
             output = str(OUTPUT_DIR / f"test_pytorch_v20_emotion_{emotion}.wav")
-            result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=0.8)
+            result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=1.0)
             results.append(result)
 
     # Print summary
