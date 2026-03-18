@@ -70,8 +70,9 @@ mlx-indextts/
 ├── scripts/                 # 开发调试脚本
 ├── ref_audios/              # 参考音频
 └── docs/
-    ├── indextts_1.5_alignment.md  # 1.5 踩坑经验
-    └── indextts_2.0_alignment.md  # 2.0 踩坑经验
+    ├── indextts_1.5_alignment.md   # 1.5 踩坑经验
+    ├── indextts_2.0_alignment.md   # 2.0 踩坑经验
+    └── implementation_research.md  # 采样/Batch/MLX-LM 调研
 ```
 
 ## 版本差异
@@ -93,51 +94,7 @@ mlx-indextts/
 - PyTorch 模型:
   - 1.5: `~/Projects/index-tts/indexTTS-1.5`
   - 2.0: `~/Projects/index-tts/indexTTS-2`
-
-## 采样策略分析 (PyTorch vs MLX)
-
-### PyTorch 原始实现
-PyTorch IndexTTS 使用 HuggingFace `generate()`:
-```python
-gen = self.gpt.gpt.generate(
-    inputs_embeds=emb,
-    do_sample=True,        # 启用采样
-    max_new_tokens=max_mel_tokens,
-    temperature=temperature,
-    top_k=top_k,
-    top_p=top_p,
-    repetition_penalty=repetition_penalty,  # 默认 10.0
-    num_beams=num_beams,   # 默认 3
-    length_penalty=length_penalty,
-)
-```
-- `do_sample=True` + `num_beams>1` = **beam-sample** (并行采样 + beam 选择)
-- `repetition_penalty=10.0` 强力惩罚重复 token
-
-### MLX 当前实现
-MLX 使用 **纯采样** (top-k + top-p + repetition_penalty):
-```python
-# 不使用 beam search，但实现了 repetition_penalty
-next_token = self._sample(logits, temperature, top_k, top_p,
-                          repetition_penalty, generated_tokens)
-```
-
-### 差异影响
-| 特性 | PyTorch | MLX | 影响 |
-|------|---------|-----|------|
-| 采样方式 | beam-sample | 纯采样 | MLX 输出多样性更高 |
-| repetition_penalty | ✅ 10.0 | ✅ 10.0 | 已对齐 |
-| num_beams | 3 | 1 | MLX 无 beam 选择 |
-| length_penalty | 1.0 | ❌ | MLX 无长度偏好 |
-
-### Beam Search 复杂度分析
-实现 beam search 需要:
-1. **多 beam KV cache 管理** - 每个 beam 独立 cache
-2. **分数累积与排序** - log_prob 累积 + length_penalty
-3. **beam 剪枝与扩展** - top-k beams 选择
-4. **early stopping** - 所有 beam 到达 EOS
-
-**结论**: 当前 `repetition_penalty=10.0` 已能有效避免重复，beam search 收益有限，暂不实现。
+- **[docs/implementation_research.md](docs/implementation_research.md)** - 采样策略、Batch 推理、MLX-LM 调研
 
 ## 开发说明
 
