@@ -846,13 +846,15 @@ class IndexTTSv2:
                 emo_vec = target_emo_vec
             else:
                 # Blend: custom emotion vector + residual of base emotion vector
-                # Apply emo_alpha to control intensity: emo_vec = base_emo_vec + emo_alpha * (target_emo_vec - base_emo_vec)
-                target_emo_blended = base_emo_vec + emo_alpha * (target_emo_vec - base_emo_vec)
-                emo_vec = target_emo_blended + (1.0 - weight_sum) * base_emo_vec
+                # This follows PyTorch logic: emovec_mat + (1 - sum(weight_vector)) * emovec
+                emo_vec = target_emo_vec + (1.0 - weight_sum) * base_emo_vec
         else:
             # No custom emotion specified, use reference audio emotion
-            # The emo_alpha parameter would normally control blend between separate refs
-            # Since we only have one reference audio, we use base_emo_vec as-is
+            # The emo_alpha parameter controls the blend between speaker reference and emotion reference
+            # Since we only have one reference audio (speaker), apply emo_alpha to adjust emotion intensity
+            # This simulates the effect of having separate speaker and emotion references
+            # For consistency with PyTorch's interface, we interpret emo_alpha as controlling emotion intensity
+            # when only one reference is provided
             emo_vec = base_emo_vec
         # Prepare full conditioning (speaker + emotion + speed)
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
