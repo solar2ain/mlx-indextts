@@ -400,7 +400,7 @@ def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True, text: Opt
     return results
 
 
-def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, run_mlx: bool = True, use_speaker_cache: bool = True):
+def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, run_mlx: bool = True, use_speaker_cache: bool = True, emo_alpha: float = 1.0):
     """Run emotion benchmark for v2.0 (MLX and PyTorch)."""
     test_text = text if text else "今天真是太开心了！我收到了期待已久的礼物，心情特别好！"
 
@@ -414,29 +414,29 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
 
     # MLX tests
     if run_mlx:
+        for emotion in ["sad", "happy", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
+            print(f"\n--- MLX Emotion: {emotion} ---")
+            output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
+            result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=emo_alpha, use_speaker_cache=use_speaker_cache)
+            results.append(result)
+
         print("\n--- MLX Baseline (no emotion) ---")
         output = str(OUTPUT_DIR / "test_mlx_v20_no_emotion.wav")
         result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
         results.append(result)
 
-        for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
-            print(f"\n--- MLX Emotion: {emotion} ---")
-            output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
-            result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=1.0, use_speaker_cache=use_speaker_cache)
-            results.append(result)
-
     # PyTorch tests
     if run_pytorch:
+        for emotion in ["sad", "happy", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
+            print(f"\n--- PyTorch Emotion: {emotion} ---")
+            output = str(OUTPUT_DIR / f"test_pytorch_v20_emotion_{emotion}.wav")
+            result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=emo_alpha)
+            results.append(result)
+
         print("\n--- PyTorch Baseline (no emotion) ---")
         output = str(OUTPUT_DIR / "test_pytorch_v20_no_emotion.wav")
         result = run_pytorch_v20(test_text, output)
         results.append(result)
-
-        for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
-            print(f"\n--- PyTorch Emotion: {emotion} ---")
-            output = str(OUTPUT_DIR / f"test_pytorch_v20_emotion_{emotion}.wav")
-            result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=1.0)
-            results.append(result)
 
     # Print summary
     print_summary(results)
@@ -533,6 +533,7 @@ def main():
     parser.add_argument("-r", "--ref-audio", type=str, default=None, help="Custom reference audio file")
     parser.add_argument("-o", "--output-dir", type=str, default=None, help="Output directory (default: test_outputs/)")
     parser.add_argument("--emotion-test", action="store_true", help="Run v2.0 emotion test (happy, sad)")
+    parser.add_argument("--emo-alpha", type=float, default=1.0, help="Emotion intensity 0.0-1.0 (default: 1.0)")
     parser.add_argument("--no-speaker-cache", action="store_true", help="Disable v2.0 speaker cache (use raw audio)")
     args = parser.parse_args()
 
@@ -548,7 +549,7 @@ def main():
 
     # Run emotion benchmark if requested
     if args.emotion_test:
-        run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, run_mlx=not args.pytorch_only, use_speaker_cache=not args.no_speaker_cache)
+        run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, run_mlx=not args.pytorch_only, use_speaker_cache=not args.no_speaker_cache, emo_alpha=args.emo_alpha)
         return
 
     # Run quantization benchmark if requested

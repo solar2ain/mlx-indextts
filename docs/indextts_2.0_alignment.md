@@ -213,6 +213,44 @@ def _layer_norm(self, x):
     return (x - mean) / mx.sqrt(var + 1e-6)
 ```
 
+### 10. 情感控制 (Emotion Control) emovec_mat 不能过投影层 ⚠️
+
+**问题**: 指定 `--emotion happy` 后生成的音频没有情感变化
+
+**根因**: `emovec_mat`（来自 feat2.pt 的情感矩阵加权求和）被错误地通过了 `emo_layer` 投影
+
+**PyTorch 实现** (infer_v2.py:552-561):
+```python
+# Step 1: merge_emovec 得到参考音频的 emovec (经过 emovec_layer + emo_layer)
+emovec = self.gpt.merge_emovec(spk_cond_emb, emo_cond_emb, ..., alpha=emo_alpha)
+
+# Step 2: emovec_mat 直接使用，不经过任何投影层
+emovec = emovec_mat + (1 - torch.sum(weight_vector)) * emovec
+```
+
+**关键点**:
+- `emovec_mat` 来自 feat2.pt，已经在 model_dim (1280) 空间，**直接使用**
+- `emovec`（base emotion）经过了 `get_emo_conditioning → emovec_layer → emo_layer`
+- 两者直接线性混合，不对 emovec_mat 做任何投影
+
+**错误的 MLX 实现**:
+```python
+target_emo_vec = self.gpt.emo_layer(emovec_mat)  # ❌ 多余的投影！
+```
+
+**正确的 MLX 实现**:
+```python
+emovec_mat = mx.array(emovec_mat_pt.cpu().numpy())  # ✅ 直接使用
+emo_vec = emovec_mat + (1.0 - weight_sum) * base_emo_vec
+```
+
+**另外**: PyTorch 会用 `emo_alpha` 预缩放 emotion weights (infer_v2.py:414-418)，MLX 也需要同步:
+```python
+emo_scale = max(0.0, min(1.0, emo_alpha))
+if emo_scale != 1.0:
+    emotion_weights = {k: v * emo_scale for k, v in emotion_weights.items()}
+```
+
 ---
 
 ## 权重转换注意事项
@@ -255,6 +293,7 @@ if "perceiver_encoder" in key or "emo_perceiver_encoder" in key:
 | 输出全为 0 或不一致 | Dropout/BatchNorm 未切换到 eval 模式 |
 | 音频幅度异常 (3x) | mel spectrogram 实现不一致 (librosa vs PyTorch) |
 | 音频幅度异常 (3x) | GPT position embedding 索引错误 |
+| 情感控制不生效 | emovec_mat 不应过 emo_layer 投影；emo_alpha 需预缩放 weights |
 | 权重加载后值不变 | 权重 key 前缀不匹配 |
 | 形状不匹配 | Conformer input_size 配置错误 |
 | 长文本截断 | max_tokens 默认值太小 |

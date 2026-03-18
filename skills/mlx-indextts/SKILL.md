@@ -60,6 +60,7 @@ uv run mlx-indextts generate \
 - `--play`: Auto-play after generation
 - `--memory-limit`: GPU memory limit in GB
 - `--max-tokens`: Maximum mel tokens (default: 800 for v1.5, 1500 for v2.0)
+- `--segment-overlap`: Crossfade overlap between segments in ms (default: 50, 0 to disable)
 
 **v2.0-only Parameters:**
 - `--emotion`: Emotion control: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm
@@ -129,7 +130,7 @@ uv run mlx-indextts convert \
 | Emotion control | ❌ | ✅ 8 emotions |
 | Runtime quantization | ✅ | ✅ |
 | Speaker pre-compute | ✅ | ✅ |
-| RTF (M2 Max) | ~0.5 | ~1.3 |
+| RTF (M2 Max) | ~0.65 | ~2.0 |
 | Load time (.npz) | ~0.3s | ~1.5s |
 
 ## Supported Emotions (v2.0)
@@ -212,11 +213,11 @@ uv run mlx-indextts generate \
 
 | Version | RTF (M2 Max) | Notes |
 |---------|--------------|-------|
-| v1.5 fp32 | ~0.5 | 2x faster than real-time |
-| v1.5 8-bit | ~0.44 | Recommended |
-| v2.0 fp32 | ~1.3 | With S2Mel CFM |
-| v2.0 8-bit | ~1.1 | 1.2x speedup |
-| v2.0 (.npz) | ~1.5 | 6x faster load than .wav |
+| v1.5 fp32 | ~0.65 | ~1.5x faster than real-time |
+| v1.5 8-bit | ~0.55 | Recommended |
+| v2.0 fp32 | ~2.0 | With S2Mel CFM |
+| v2.0 8-bit | ~1.7 | ~15% speedup |
+| v2.0 (.npz) | ~2.0 | 6x faster load than .wav |
 
 ## Troubleshooting
 

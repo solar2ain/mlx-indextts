@@ -17,6 +17,63 @@ from mlx_indextts.models.gpt import UnifiedVoice
 from mlx_indextts.models.bigvgan import BigVGAN
 
 
+def crossfade_segments(
+    audio_segments: List[mx.array],
+    sample_rate: int,
+    overlap_ms: int = 50,
+) -> mx.array:
+    """Crossfade audio segments for smooth transitions.
+
+    Uses linear crossfade to eliminate boundary discontinuities between segments.
+
+    Args:
+        audio_segments: List of audio segments (1D mx.arrays)
+        sample_rate: Audio sample rate in Hz
+        overlap_ms: Overlap duration in milliseconds (default: 50ms)
+
+    Returns:
+        Concatenated audio with smooth transitions
+    """
+    if len(audio_segments) == 0:
+        return mx.array([])
+    if len(audio_segments) == 1:
+        return audio_segments[0]
+    if overlap_ms <= 0:
+        return mx.concatenate(audio_segments, axis=0)
+
+    overlap_samples = int(overlap_ms * sample_rate / 1000)
+
+    result = audio_segments[0]
+
+    for i in range(1, len(audio_segments)):
+        current_segment = audio_segments[i]
+
+        # If either segment is too short, just concatenate
+        if len(result) < overlap_samples or len(current_segment) < overlap_samples:
+            result = mx.concatenate([result, current_segment], axis=0)
+            continue
+
+        # Get overlap regions
+        prev_overlap = result[-overlap_samples:]
+        curr_overlap = current_segment[:overlap_samples]
+
+        # Create linear fade weights
+        fade_out = mx.linspace(1.0, 0.0, overlap_samples)
+        fade_in = mx.linspace(0.0, 1.0, overlap_samples)
+
+        # Mix overlap region
+        overlap_mix = prev_overlap * fade_out + curr_overlap * fade_in
+
+        # Concatenate: prev (without overlap) + mixed overlap + current (without overlap)
+        result = mx.concatenate([
+            result[:-overlap_samples],
+            overlap_mix,
+            current_segment[overlap_samples:]
+        ], axis=0)
+
+    return result
+
+
 def save_speaker(
     conditioning: mx.array,
     ref_mel: mx.array,
@@ -274,6 +331,7 @@ class IndexTTS:
         repetition_penalty: float = 10.0,
         seed: Optional[int] = None,
         verbose: bool = False,
+        segment_overlap_ms: int = 50,
     ) -> mx.array:
         """Generate speech from text.
 
@@ -288,6 +346,7 @@ class IndexTTS:
             repetition_penalty: Penalty for repeating tokens (default: 10.0)
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
+            segment_overlap_ms: Overlap duration in ms for crossfade between segments (default: 50, 0 to disable)
 
         Returns:
             Generated audio waveform (samples,)
@@ -420,11 +479,15 @@ class IndexTTS:
         if len(all_audio) == 0:
             raise RuntimeError("No audio generated")
 
-        # Concatenate all segments
+        # Concatenate all segments with crossfade for smooth transitions
         if len(all_audio) == 1:
             final_audio = all_audio[0]
         else:
-            final_audio = mx.concatenate(all_audio, axis=0)
+            final_audio = crossfade_segments(
+                all_audio,
+                sample_rate=self.sample_rate,
+                overlap_ms=segment_overlap_ms,
+            )
 
         if verbose:
             elapsed = time.perf_counter() - start_time

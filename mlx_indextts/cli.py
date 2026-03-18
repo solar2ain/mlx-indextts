@@ -141,6 +141,7 @@ def generate_command(args):
             emo_alpha=getattr(args, 'emo_alpha', 1.0),
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
+            segment_overlap_ms=getattr(args, 'segment_overlap', 50),
         )
     else:
         from mlx_indextts.generate import IndexTTS
@@ -163,6 +164,7 @@ def generate_command(args):
             repetition_penalty=getattr(args, 'repetition_penalty', 10.0),
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
+            segment_overlap_ms=getattr(args, 'segment_overlap', 50),
         )
 
         tts.save_audio(audio, args.output)
@@ -355,6 +357,12 @@ def main():
         type=str,
         default="fp32",
         help="Runtime quantization (GPT only): 4, 8, or fp32 (default: fp32)",
+    )
+    generate_parser.add_argument(
+        "--segment-overlap",
+        type=int,
+        default=50,
+        help="Overlap duration (ms) for crossfade between segments (default: 50, 0 to disable)",
     )
     # v2.0 specific options
     generate_parser.add_argument(

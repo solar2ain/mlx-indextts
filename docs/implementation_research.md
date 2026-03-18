@@ -163,6 +163,61 @@ def apply_repetition_penalty(logits, generated_tokens, penalty):
 
 ---
 
+---
+
+## Segment 间音色一致性问题
+
+### 问题描述
+长文本被切分成多个 segments 后，每个 segment 独立生成语音，简单拼接会导致：
+1. **边界突变**: 相邻段交接处可能出现音频跳变
+2. **音色漂移**: 不同段的音色可能略有不同
+
+### PyTorch 原始实现分析
+PyTorch IndexTTS (1.5 和 2.0) 都是简单拼接，没有任何衔接处理：
+```python
+# infer.py (1.5)
+wav = torch.cat(wavs, dim=1)
+
+# infer_v2.py (2.0)
+wavs = self.insert_interval_silence(wavs, ...)  # 只插入静音
+wav = torch.cat(wavs, dim=1)
+```
+
+### 解决方案: Crossfade 平滑过渡
+
+使用线性交叉淡入淡出（crossfade）来平滑 segment 边界，消除突变：
+
+```
+段A末尾:  ────────╲
+                   ╳  重叠区域 (crossfade)
+段B开头:          ╱────────
+```
+
+**原理**：
+- 在相邻段之间创建重叠区域（默认 50ms）
+- 前段末尾应用淡出（fade-out: 1→0）
+- 后段开头应用淡入（fade-in: 0→1）
+- 重叠区域 = 前段 × fade_out + 后段 × fade_in
+
+**效果**：
+- 消除边界处的音频跳变
+- 相位平滑过渡
+- 不影响非重叠区域的音质
+
+**局限性**：
+- 只解决边界突变，不能根本解决音色漂移
+- 音色漂移需要更复杂的方案（如段间状态传递），暂不实现
+
+### 实现位置
+- `mlx_indextts/generate.py`: `IndexTTS.generate()` 方法
+- `mlx_indextts/generate_v2.py`: `IndexTTSv2.generate()` 方法
+
+### 参数
+- `segment_overlap_ms`: 段间重叠时间（毫秒），默认 50ms
+- 设为 0 可禁用 crossfade，回退到简单拼接
+
+---
+
 ## 相关文档
 - [indextts_1.5_alignment.md](indextts_1.5_alignment.md) - 1.5 踩坑经验
 - [indextts_2.0_alignment.md](indextts_2.0_alignment.md) - 2.0 踩坑经验

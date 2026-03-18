@@ -42,6 +42,14 @@ uv run mlx-indextts generate \
     -t "今天真开心！" \
     -o output.wav \
     --emotion happy --emo-alpha 0.8
+
+# 段间 crossfade (默认 50ms, 0 禁用)
+uv run mlx-indextts generate \
+    -m models/mlx-indexTTS-1.5 \
+    -r ref_audios/voice_01.wav \
+    -t "长文本会被自动分段，段间使用 crossfade 平滑过渡。" \
+    -o output.wav \
+    --segment-overlap 50
 ```
 
 ## 项目结构
@@ -86,7 +94,7 @@ mlx-indextts/
 | S2Mel (CFM) | ❌ | ✅ |
 | 运行时量化 | ✅ | ✅ |
 | Speaker 预计算 | ✅ | ✅ |
-| RTF (M2 Max) | ~0.5 | ~1.3 |
+| RTF (M2 Max) | ~0.65 | ~2.0 |
 | 加载时间 (.npz) | ~0.3s | ~1.5s |
 
 ## 参考资源
