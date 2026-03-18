@@ -29,6 +29,8 @@ import mlx.nn as nn
 
 from omegaconf import OmegaConf
 
+from mlx_indextts.generate import crossfade_segments
+
 
 # 8 emotion categories in IndexTTS 2.0
 EMOTION_CATEGORIES = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
@@ -743,6 +745,7 @@ class IndexTTSv2:
         emo_alpha: float = 1.0,
         seed: Optional[int] = None,
         verbose: bool = False,
+        segment_overlap_ms: int = 50,
     ) -> np.ndarray:
         """Generate speech from text.
 
@@ -766,6 +769,7 @@ class IndexTTSv2:
             emo_alpha: Emotion intensity (0.0=reference audio, 1.0=full specified emotion)
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
+            segment_overlap_ms: Overlap duration in ms for crossfade between segments (default: 50, 0 to disable)
 
         Returns:
             Generated audio waveform as numpy array
@@ -825,19 +829,31 @@ class IndexTTSv2:
             if verbose:
                 print(f"Using specified emotion: {emotion_weights}")
 
-            # Compute target emotion vector from emo_matrix
+            # Compute target emotion vector from emo_matrix based on the specified weights
             target_emo_vec_pt = self._compute_emotion_vector(emotion_weights, style_pt)
-            # Pass through emovec_layer and emo_layer (need to do in MLX)
-            # Actually the emo_matrix is already in the emovec_layer output space (1280)
-            # So we need to apply emo_layer
-            target_emo_vec = mx.array(target_emo_vec_pt.cpu().numpy())
-            target_emo_vec = self.gpt.emo_layer(target_emo_vec)
+            # Apply the same processing as get_emovec: emovec_layer + emo_layer
+            target_emo_vec_mx = mx.array(target_emo_vec_pt.cpu().numpy())
+            target_emo_vec = self.gpt.emo_layer(target_emo_vec_mx)
 
-            # Blend with alpha: out = base + alpha * (target - base)
-            emo_vec = base_emo_vec + emo_alpha * (target_emo_vec - base_emo_vec)
+            # Get the sum of emotion weights
+            weight_sum = sum(emotion_weights.get(cat, 0.0) for cat in EMOTION_CATEGORIES)
+
+            # In PyTorch implementation, when custom emotion vectors are provided,
+            # they blend: custom_emo_vector + (1 - sum_weights) * base_emo_vec
+            # where base_emo_vec is the emotion from the speaker reference
+            if weight_sum >= 1.0:
+                # If emotion weights sum to 1.0 or more, use just the custom emotion vector
+                emo_vec = target_emo_vec
+            else:
+                # Blend: custom emotion vector + residual of base emotion vector
+                # Apply emo_alpha to control intensity: emo_vec = base_emo_vec + emo_alpha * (target_emo_vec - base_emo_vec)
+                target_emo_blended = base_emo_vec + emo_alpha * (target_emo_vec - base_emo_vec)
+                emo_vec = target_emo_blended + (1.0 - weight_sum) * base_emo_vec
         else:
+            # No custom emotion specified, use reference audio emotion
+            # The emo_alpha parameter would normally control blend between separate refs
+            # Since we only have one reference audio, we use base_emo_vec as-is
             emo_vec = base_emo_vec
-
         # Prepare full conditioning (speaker + emotion + speed)
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 
@@ -1001,8 +1017,18 @@ class IndexTTSv2:
         if len(all_audio) == 0:
             raise RuntimeError("No audio generated")
 
-        # Concatenate all segments
-        audio = np.concatenate(all_audio)
+        # Concatenate all segments with crossfade for smooth transitions
+        # Note: silence segments (if any) are not crossfaded
+        if len(all_audio) == 1:
+            audio = all_audio[0]
+        elif segment_overlap_ms > 0 and silence is None:
+            # Apply crossfade when no silence insertion
+            audio_mx_segments = [mx.array(seg) for seg in all_audio]
+            audio_mx = crossfade_segments(audio_mx_segments, sample_rate, segment_overlap_ms)
+            audio = np.array(audio_mx)
+        else:
+            # Simple concatenation when silence is used (silence already provides transition)
+            audio = np.concatenate(all_audio)
 
         total_time = time.perf_counter() - start_time
         audio_duration = len(audio) / sample_rate
