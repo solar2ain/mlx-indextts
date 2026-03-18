@@ -400,7 +400,7 @@ def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True, text: Opt
     return results
 
 
-def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, use_speaker_cache: bool = True):
+def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, run_mlx: bool = True, use_speaker_cache: bool = True):
     """Run emotion benchmark for v2.0 (MLX and PyTorch)."""
     test_text = text if text else "今天真是太开心了！我收到了期待已久的礼物，心情特别好！"
 
@@ -413,16 +413,17 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
     results = []
 
     # MLX tests
-    print("\n--- MLX Baseline (no emotion) ---")
-    output = str(OUTPUT_DIR / "test_mlx_v20_no_emotion.wav")
-    result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
-    results.append(result)
-
-    for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
-        print(f"\n--- MLX Emotion: {emotion} ---")
-        output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
-        result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=1.0, use_speaker_cache=use_speaker_cache)
+    if run_mlx:
+        print("\n--- MLX Baseline (no emotion) ---")
+        output = str(OUTPUT_DIR / "test_mlx_v20_no_emotion.wav")
+        result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
         results.append(result)
+
+        for emotion in ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
+            print(f"\n--- MLX Emotion: {emotion} ---")
+            output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
+            result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=1.0, use_speaker_cache=use_speaker_cache)
+            results.append(result)
 
     # PyTorch tests
     if run_pytorch:
@@ -547,7 +548,7 @@ def main():
 
     # Run emotion benchmark if requested
     if args.emotion_test:
-        run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, use_speaker_cache=not args.no_speaker_cache)
+        run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, run_mlx=not args.pytorch_only, use_speaker_cache=not args.no_speaker_cache)
         return
 
     # Run quantization benchmark if requested
