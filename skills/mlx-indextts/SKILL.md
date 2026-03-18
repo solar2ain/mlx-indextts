@@ -31,12 +31,13 @@ uv run mlx-indextts generate \
     --quantize 8 \
     --play  # Optional: play after generation
 
-# v2.0
+# v2.0 - outputs OGG
 uv run mlx-indextts generate \
     -m models/mlx-indexTTS-2.0 \
     -r <reference_audio.wav> \
     -t "Text to synthesize" \
-    -o output.wav
+    -o output.wav && \
+  ffmpeg -i output/audio_000.wav -c:a libopus -b:a 64k output/audio_000.ogg
 
 # v2.0 with emotion control
 uv run mlx-indextts generate \
@@ -54,6 +55,7 @@ uv run mlx-indextts generate \
 - `-o, --output`: Output audio file path
 - `-q, --quantize`: Runtime quantization (4, 8, or fp32)
 - `--seed`: Random seed for reproducible generation
+- `--temperature`: Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)
 - `-v, --verbose`: Show detailed timing info
 - `--play`: Auto-play after generation
 - `--memory-limit`: GPU memory limit in GB
@@ -62,8 +64,8 @@ uv run mlx-indextts generate \
 **v2.0-only Parameters:**
 - `--emotion`: Emotion control: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm
 - `--emo-alpha`: Emotion intensity 0.0-1.0 (default: 1.0, 0=reference audio emotion)
-- `--steps`: Diffusion steps (default: 25)
-- `--cfg`: CFG rate (default: 0.7)
+- `--diffusion-steps`: Diffusion steps (default: 25)
+- `--cfg-rate`: CFG rate (default: 0.7)
 
 ### Pre-compute Speaker (Faster Inference)
 

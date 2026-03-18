@@ -138,6 +138,7 @@ Required:
 
 Common options:
   --max-tokens       Max mel tokens (default: 800 for v1.5, 1500 for v2.0)
+  --temperature      Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
@@ -146,8 +147,8 @@ Common options:
 v2.0 only:
   --emotion          Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm
   --emo-alpha        Emotion intensity 0.0-1.0 (default: 1.0)
-  --steps            Diffusion steps (default: 25)
-  --cfg              CFG rate (default: 0.7)
+  --diffusion-steps  Diffusion steps (default: 25)
+  --cfg-rate         CFG rate (default: 0.7)
 ```
 
 ## Version Comparison
@@ -156,6 +157,7 @@ v2.0 only:
 |---------|------|------|
 | Sample rate | 24000 Hz | 22050 Hz |
 | Max tokens | 800 | 1815 |
+| Default temperature | 1.0 | 0.8 |
 | Emotion control | ❌ | ✅ 8 emotions |
 | S2Mel (CFM) | ❌ | ✅ |
 | BigVGAN | Custom | nvidia pretrained |

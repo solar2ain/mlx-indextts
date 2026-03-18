@@ -731,9 +731,12 @@ class IndexTTSv2:
         reference_audio: str,
         output_path: Optional[str] = None,
         max_mel_tokens: int = 1500,
+        max_text_tokens_per_segment: int = 120,
+        interval_silence: int = 200,
         temperature: float = 0.8,
         top_p: float = 0.8,
         top_k: int = 30,
+        repetition_penalty: float = 10.0,
         diffusion_steps: int = 25,
         cfg_rate: float = 0.7,
         emotion: Optional[Union[str, Dict[str, float]]] = None,
@@ -747,10 +750,13 @@ class IndexTTSv2:
             text: Input text to synthesize
             reference_audio: Path to reference audio file
             output_path: Optional path to save output audio
-            max_mel_tokens: Maximum mel tokens to generate
+            max_mel_tokens: Maximum mel tokens to generate per segment
+            max_text_tokens_per_segment: Maximum text tokens per segment (for long text splitting)
+            interval_silence: Silence duration (ms) to insert between segments (default: 200)
             temperature: Sampling temperature
             top_p: Top-p sampling parameter
             top_k: Top-k sampling parameter
+            repetition_penalty: Penalty for repeating tokens (default: 10.0)
             diffusion_steps: Number of diffusion steps for S2Mel
             cfg_rate: Classifier-free guidance rate
             emotion: Emotion specification. Can be:
@@ -772,6 +778,7 @@ class IndexTTSv2:
                 print(f"Using seed: {seed}")
 
         start_time = time.perf_counter()
+        sample_rate = 22050
 
         # 1. Process reference audio (PyTorch preprocessing)
         ref_data = self._process_reference_audio(reference_audio)
@@ -785,11 +792,19 @@ class IndexTTSv2:
         # GPT expects NCL format: (batch, 1024, time)
         spk_cond_emb_ncl = spk_cond_emb.transpose(0, 2, 1)
 
-        # 2. Tokenize text
-        text_tokens = self.tokenizer.encode(text)
-        text_tokens = mx.array([text_tokens], dtype=mx.int32)
+        # 2. Tokenize text and split into segments
+        text_tokens_list = self.tokenizer.tokenize(text)
+        segments = self.tokenizer.split_segments(
+            text_tokens_list,
+            max_tokens_per_segment=max_text_tokens_per_segment,
+        )
+
         if verbose:
-            print(f"Text tokens: {text_tokens.shape[1]}")
+            total_tokens = len(text_tokens_list)
+            print(f"Text tokens: {total_tokens}, Segments: {len(segments)}")
+            if len(segments) > 1:
+                for i, seg in enumerate(segments):
+                    print(f"  Segment {i+1}: {len(seg)} tokens")
 
         # 3. GPT conditioning (MLX)
         # Speaker conditioning
@@ -826,135 +841,184 @@ class IndexTTSv2:
         # Prepare full conditioning (speaker + emotion + speed)
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 
-        # 4. GPT autoregressive generation (MLX)
-        gpt_start = time.perf_counter()
-
-        # Prepare inputs
-        input_emb, _ = self.gpt.prepare_inputs(conditioning, text_tokens)
-
-        # Add start mel token
-        mel_start = mx.array([[self.gpt.start_mel_token]], dtype=mx.int32)
-        mel_start_emb = self.gpt.mel_embedding(mel_start)
-        mel_start_emb = mel_start_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(0)
-        input_emb = mx.concatenate([input_emb, mel_start_emb], axis=1)
-
-        # Autoregressive loop
-        mel_codes = []
-        cache = None
-
-        for i in range(max_mel_tokens):
-            if cache is None:
-                next_token, _, cache = self.gpt.generate_step(
-                    input_emb, cache, temperature, top_k, top_p
-                )
-            else:
-                last_token = mx.array([[mel_codes[-1]]], dtype=mx.int32)
-                last_emb = self.gpt.mel_embedding(last_token)
-                # Position calculation matches PyTorch: attention_mask.shape[1] - mel_len
-                # In PyTorch: mel_len = inputs_embeds.shape[1] (without start_mel_token)
-                #             attention_mask starts at mel_len + 1, grows by 1 each step
-                # So position for first generated token = (mel_len + 2) - mel_len = 2
-                # Position = len(mel_codes) + 1 (since mel_codes[0] is at position 2)
-                mel_pos = len(mel_codes) + 1
-                last_emb = last_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(mel_pos)
-                next_token, _, cache = self.gpt.generate_step(
-                    last_emb, cache, temperature, top_k, top_p
-                )
-
-            token_id = next_token[0].item()
-
-            if token_id == self.gpt.stop_mel_token:
-                break
-
-            mel_codes.append(token_id)
-            mx.eval(cache)
-
-            if verbose and (i + 1) % 50 == 0:
-                print(f"Generated {i + 1} mel tokens...")
-
-        gpt_gen_time = time.perf_counter() - gpt_start
-        if verbose:
-            print(f"Generated {len(mel_codes)} mel tokens")
-
-        if len(mel_codes) == 0:
-            raise RuntimeError("No mel tokens generated")
-
-        # 5. GPT forward to get latent (MLX)
-        s2mel_start = time.perf_counter()
-
-        mel_codes_tensor = mx.array([mel_codes], dtype=mx.int32)
-        latent = self.gpt.forward_latent(conditioning, text_tokens, mel_codes_tensor)
-
-        # 6. S2Mel processing
-
-        # gpt_layer projection (MLX)
-        latent = self.s2mel_mlx.gpt_layer(latent)
-
-        # vq2emb: mel_codes -> embeddings (MLX)
-        codes_mx = mx.array([mel_codes], dtype=mx.int32)
-        S_infer = self._vq2emb_forward(codes_mx)  # (1, 1024, T)
-        S_infer = S_infer.transpose(0, 2, 1)  # (1, T, 1024)
-
-        # Add latent
-        S_infer = S_infer + latent
-
-        # Length regulator (MLX)
-        code_len = len(mel_codes)
-        target_lengths = mx.array([int(code_len * 1.72)])
-        cond, _, _, _, _ = self.s2mel_mlx.length_regulator(S_infer, target_lengths, n_quantizers=3)
-
-        # Concatenate with prompt condition
+        # Pre-compute MLX arrays for reuse
         prompt_condition = mx.array(prompt_condition_pt.cpu().numpy())
-        cat_condition = mx.concatenate([prompt_condition, cond], axis=1)
-
-        # 7. CFM inference (MLX)
         ref_mel = mx.array(ref_mel_pt.cpu().numpy())
         style = mx.array(style_pt.cpu().numpy())
-        x_lens = mx.array([cat_condition.shape[1]])
 
-        mel_out = self.s2mel_mlx.cfm.inference(
-            mu=cat_condition,
-            x_lens=x_lens,
-            prompt=ref_mel,
-            style=style,
-            f0=None,
-            n_timesteps=diffusion_steps,
-            temperature=1.0,
-            inference_cfg_rate=cfg_rate,
-        )
-        mx.eval(mel_out)
+        # 4. Generate audio for each segment
+        all_audio = []
+        total_gpt_gen_time = 0
+        total_s2mel_time = 0
+        total_vocoder_time = 0
+        total_mel_tokens = 0
 
-        s2mel_time = time.perf_counter() - s2mel_start
+        # Create silence for interval
+        if interval_silence > 0 and len(segments) > 1:
+            silence_samples = int(sample_rate * interval_silence / 1000.0)
+            silence = np.zeros(silence_samples, dtype=np.float32)
+        else:
+            silence = None
 
-        # Trim prompt region
-        prompt_len = ref_mel.shape[-1]
-        mel_out = mel_out[:, :, prompt_len:]
+        for seg_idx, segment_tokens in enumerate(segments):
+            if verbose and len(segments) > 1:
+                print(f"Processing segment {seg_idx + 1}/{len(segments)}...")
 
-        # 8. BigVGAN vocoder (MLX)
-        vocoder_start = time.perf_counter()
+            # Convert tokens to IDs
+            token_ids = self.tokenizer.convert_tokens_to_ids(segment_tokens)
+            text_tokens = mx.array([token_ids], dtype=mx.int32)
 
-        audio_out = self.bigvgan_mlx(mel_out)
-        mx.eval(audio_out)
+            # 4.1 GPT autoregressive generation (MLX)
+            gpt_start = time.perf_counter()
 
-        vocoder_time = time.perf_counter() - vocoder_start
+            # Prepare inputs
+            input_emb, _ = self.gpt.prepare_inputs(conditioning, text_tokens)
 
-        # Convert to numpy
-        audio = np.array(audio_out[0, 0])
+            # Add start mel token
+            mel_start = mx.array([[self.gpt.start_mel_token]], dtype=mx.int32)
+            mel_start_emb = self.gpt.mel_embedding(mel_start)
+            mel_start_emb = mel_start_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(0)
+            input_emb = mx.concatenate([input_emb, mel_start_emb], axis=1)
+
+            # Autoregressive loop
+            mel_codes = []
+            cache = None
+
+            for i in range(max_mel_tokens):
+                if cache is None:
+                    next_token, _, cache = self.gpt.generate_step(
+                        input_emb, cache, temperature, top_k, top_p,
+                        repetition_penalty, mel_codes
+                    )
+                else:
+                    last_token = mx.array([[mel_codes[-1]]], dtype=mx.int32)
+                    last_emb = self.gpt.mel_embedding(last_token)
+                    mel_pos = len(mel_codes) + 1
+                    last_emb = last_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(mel_pos)
+                    next_token, _, cache = self.gpt.generate_step(
+                        last_emb, cache, temperature, top_k, top_p,
+                        repetition_penalty, mel_codes
+                    )
+
+                token_id = next_token[0].item()
+
+                if token_id == self.gpt.stop_mel_token:
+                    break
+
+                mel_codes.append(token_id)
+                mx.eval(cache)
+
+                if verbose and (i + 1) % 100 == 0:
+                    print(f"  Generated {i + 1} mel tokens...")
+
+            gpt_gen_time = time.perf_counter() - gpt_start
+            total_gpt_gen_time += gpt_gen_time
+
+            # Warn if generation stopped due to max tokens
+            if len(mel_codes) >= max_mel_tokens - 1:
+                warnings.warn(
+                    f"Generation stopped due to exceeding max_mel_tokens ({max_mel_tokens}). "
+                    f"Consider reducing max_text_tokens_per_segment ({max_text_tokens_per_segment}) "
+                    f"or increasing max_mel_tokens.",
+                    RuntimeWarning,
+                )
+
+            total_mel_tokens += len(mel_codes)
+
+            if verbose:
+                print(f"  Segment {seg_idx + 1}: {len(mel_codes)} mel tokens")
+
+            if len(mel_codes) == 0:
+                warnings.warn(f"No mel tokens generated for segment {seg_idx + 1}")
+                continue
+
+            # 4.2 GPT forward to get latent (MLX)
+            s2mel_start = time.perf_counter()
+
+            mel_codes_tensor = mx.array([mel_codes], dtype=mx.int32)
+            latent = self.gpt.forward_latent(conditioning, text_tokens, mel_codes_tensor)
+
+            # 4.3 S2Mel processing
+
+            # gpt_layer projection (MLX)
+            latent = self.s2mel_mlx.gpt_layer(latent)
+
+            # vq2emb: mel_codes -> embeddings (MLX)
+            codes_mx = mx.array([mel_codes], dtype=mx.int32)
+            S_infer = self._vq2emb_forward(codes_mx)  # (1, 1024, T)
+            S_infer = S_infer.transpose(0, 2, 1)  # (1, T, 1024)
+
+            # Add latent
+            S_infer = S_infer + latent
+
+            # Length regulator (MLX)
+            code_len = len(mel_codes)
+            target_lengths = mx.array([int(code_len * 1.72)])
+            cond, _, _, _, _ = self.s2mel_mlx.length_regulator(S_infer, target_lengths, n_quantizers=3)
+
+            # Concatenate with prompt condition
+            cat_condition = mx.concatenate([prompt_condition, cond], axis=1)
+
+            # 4.4 CFM inference (MLX)
+            x_lens = mx.array([cat_condition.shape[1]])
+
+            mel_out = self.s2mel_mlx.cfm.inference(
+                mu=cat_condition,
+                x_lens=x_lens,
+                prompt=ref_mel,
+                style=style,
+                f0=None,
+                n_timesteps=diffusion_steps,
+                temperature=1.0,
+                inference_cfg_rate=cfg_rate,
+            )
+            mx.eval(mel_out)
+
+            s2mel_time = time.perf_counter() - s2mel_start
+            total_s2mel_time += s2mel_time
+
+            # Trim prompt region
+            prompt_len = ref_mel.shape[-1]
+            mel_out = mel_out[:, :, prompt_len:]
+
+            # 4.5 BigVGAN vocoder (MLX)
+            vocoder_start = time.perf_counter()
+
+            audio_out = self.bigvgan_mlx(mel_out)
+            mx.eval(audio_out)
+
+            vocoder_time = time.perf_counter() - vocoder_start
+            total_vocoder_time += vocoder_time
+
+            # Convert to numpy and collect
+            segment_audio = np.array(audio_out[0, 0])
+            all_audio.append(segment_audio)
+
+            # Add silence between segments (not after the last one)
+            if silence is not None and seg_idx < len(segments) - 1:
+                all_audio.append(silence)
+
+        if len(all_audio) == 0:
+            raise RuntimeError("No audio generated")
+
+        # Concatenate all segments
+        audio = np.concatenate(all_audio)
 
         total_time = time.perf_counter() - start_time
-        audio_duration = len(audio) / 22050
+        audio_duration = len(audio) / sample_rate
 
         if verbose:
             rtf = total_time / audio_duration
             print(f"Generated {audio_duration:.2f}s audio in {total_time:.2f}s (RTF: {rtf:.3f})")
-            print(f"  GPT gen: {gpt_gen_time:.2f}s")
-            print(f"  S2Mel: {s2mel_time:.2f}s")
-            print(f"  BigVGAN: {vocoder_time:.2f}s")
+            print(f"  GPT gen: {total_gpt_gen_time:.2f}s")
+            print(f"  S2Mel: {total_s2mel_time:.2f}s")
+            print(f"  BigVGAN: {total_vocoder_time:.2f}s")
+            print(f"  Total mel tokens: {total_mel_tokens}")
 
         # Save if output path provided
         if output_path:
             import soundfile as sf
-            sf.write(output_path, audio, 22050)
+            sf.write(output_path, audio, sample_rate)
 
         return audio
 

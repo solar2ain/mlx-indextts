@@ -333,6 +333,8 @@ class UnifiedVoiceV2(nn.Module):
         temperature: float = 1.0,
         top_k: int = 30,
         top_p: float = 0.8,
+        repetition_penalty: float = 1.0,
+        generated_tokens: Optional[List[int]] = None,
     ) -> Tuple[mx.array, mx.array, List[Tuple[mx.array, mx.array]]]:
         """Generate one mel token.
 
@@ -342,6 +344,8 @@ class UnifiedVoiceV2(nn.Module):
             temperature: Sampling temperature
             top_k: Top-k sampling
             top_p: Top-p (nucleus) sampling
+            repetition_penalty: Penalty for repeating tokens (1.0 = no penalty)
+            generated_tokens: List of previously generated token IDs for repetition penalty
 
         Returns:
             Tuple of (next_token, logits, updated_cache)
@@ -354,9 +358,55 @@ class UnifiedVoiceV2(nn.Module):
         logits = self.mel_head(hidden)
 
         # Sample
-        next_token = self._sample(logits[:, 0, :], temperature, top_k, top_p)
+        next_token = self._sample(
+            logits[:, 0, :], temperature, top_k, top_p,
+            repetition_penalty, generated_tokens
+        )
 
         return next_token, logits, new_cache
+
+    def _apply_repetition_penalty(
+        self,
+        logits: mx.array,
+        generated_tokens: List[int],
+        penalty: float,
+    ) -> mx.array:
+        """Apply repetition penalty to logits.
+
+        For tokens that have been generated before:
+        - If logits > 0: divide by penalty (reduce probability)
+        - If logits < 0: multiply by penalty (reduce probability)
+
+        Args:
+            logits: Logits (batch, vocab_size)
+            generated_tokens: List of previously generated token IDs
+            penalty: Repetition penalty (1.0 = no penalty, >1.0 = penalize)
+
+        Returns:
+            Modified logits
+        """
+        if penalty == 1.0 or not generated_tokens:
+            return logits
+
+        # Get unique tokens
+        unique_tokens = list(set(generated_tokens))
+
+        # Create penalty mask
+        for token_id in unique_tokens:
+            if 0 <= token_id < logits.shape[-1]:
+                token_logit = logits[:, token_id]
+                # Apply penalty: positive logits get divided, negative get multiplied
+                new_logit = mx.where(
+                    token_logit > 0,
+                    token_logit / penalty,
+                    token_logit * penalty
+                )
+                # Update the logits array
+                one_hot = mx.zeros((1, logits.shape[-1]))
+                one_hot = one_hot.at[:, token_id].add(1.0)
+                logits = logits * (1 - one_hot) + new_logit * one_hot
+
+        return logits
 
     def _sample(
         self,
@@ -364,6 +414,8 @@ class UnifiedVoiceV2(nn.Module):
         temperature: float = 1.0,
         top_k: int = 30,
         top_p: float = 0.8,
+        repetition_penalty: float = 1.0,
+        generated_tokens: Optional[List[int]] = None,
     ) -> mx.array:
         """Sample from logits.
 
@@ -372,10 +424,16 @@ class UnifiedVoiceV2(nn.Module):
             temperature: Sampling temperature
             top_k: Top-k filtering
             top_p: Top-p (nucleus) filtering
+            repetition_penalty: Penalty for repeating tokens
+            generated_tokens: List of previously generated token IDs
 
         Returns:
             Sampled tokens (batch,)
         """
+        # Apply repetition penalty first (before temperature)
+        if repetition_penalty != 1.0 and generated_tokens:
+            logits = self._apply_repetition_penalty(logits, generated_tokens, repetition_penalty)
+
         if temperature == 0:
             return mx.argmax(logits, axis=-1)
 

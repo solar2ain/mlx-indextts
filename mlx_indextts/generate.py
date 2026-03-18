@@ -1,6 +1,7 @@
 """Speech generation with IndexTTS."""
 
 import time
+import warnings
 from pathlib import Path
 from typing import Generator, List, Optional, Union
 
@@ -266,9 +267,11 @@ class IndexTTS:
         text: str,
         ref_audio: Union[str, Path, mx.array],
         max_mel_tokens: int = 600,
+        max_text_tokens_per_segment: int = 120,
         temperature: float = 1.0,
         top_k: int = 30,
         top_p: float = 0.8,
+        repetition_penalty: float = 10.0,
         seed: Optional[int] = None,
         verbose: bool = False,
     ) -> mx.array:
@@ -277,10 +280,12 @@ class IndexTTS:
         Args:
             text: Input text
             ref_audio: Reference audio for voice cloning
-            max_mel_tokens: Maximum mel tokens to generate
+            max_mel_tokens: Maximum mel tokens to generate per segment
+            max_text_tokens_per_segment: Maximum text tokens per segment (for long text splitting)
             temperature: Sampling temperature
             top_k: Top-k sampling parameter
             top_p: Top-p (nucleus) sampling parameter
+            repetition_penalty: Penalty for repeating tokens (default: 10.0)
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
 
@@ -296,84 +301,142 @@ class IndexTTS:
         # Get conditioning
         conditioning, ref_mel = self.get_conditioning(ref_audio)
 
-        # Tokenize text
-        text_tokens = self.tokenizer.encode(text)
-        text_tokens = mx.array(text_tokens, dtype=mx.int32)[None, :]  # Add batch dim
+        # Tokenize text and split into segments
+        text_tokens_list = self.tokenizer.tokenize(text)
+        segments = self.tokenizer.split_segments(
+            text_tokens_list,
+            max_tokens_per_segment=max_text_tokens_per_segment,
+        )
 
         if verbose:
-            print(f"Text tokens: {text_tokens.shape[1]}")
+            total_tokens = len(text_tokens_list)
+            print(f"Text tokens: {total_tokens}, Segments: {len(segments)}")
+            if len(segments) > 1:
+                for i, seg in enumerate(segments):
+                    print(f"  Segment {i+1}: {len(seg)} tokens")
 
-        # Prepare inputs
-        input_emb, _ = self.gpt.prepare_inputs(conditioning, text_tokens)
+        # Generate audio for each segment
+        all_audio = []
+        total_mel_tokens = 0
+        total_gpt_time = 0.0
+        total_latent_time = 0.0
+        total_bigvgan_time = 0.0
 
-        # Add start mel token
-        mel_start = mx.array([[self.gpt.start_mel_token]], dtype=mx.int32)
-        mel_start_emb = self.gpt.mel_embedding(mel_start)
-        mel_start_emb = mel_start_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(0)
-        input_emb = mx.concatenate([input_emb, mel_start_emb], axis=1)
+        for seg_idx, segment_tokens in enumerate(segments):
+            if verbose and len(segments) > 1:
+                print(f"Processing segment {seg_idx + 1}/{len(segments)}...")
 
-        # Generate mel codes autoregressively
-        mel_codes = []
-        cache = None
+            # Convert tokens to IDs
+            token_ids = self.tokenizer.convert_tokens_to_ids(segment_tokens)
+            text_tokens = mx.array(token_ids, dtype=mx.int32)[None, :]  # Add batch dim
 
-        for i in range(max_mel_tokens):
-            if cache is None:
-                next_token, _, cache = self.gpt.generate_step(
-                    input_emb, cache, temperature, top_k, top_p
+            # Prepare inputs
+            input_emb, _ = self.gpt.prepare_inputs(conditioning, text_tokens)
+
+            # Add start mel token
+            mel_start = mx.array([[self.gpt.start_mel_token]], dtype=mx.int32)
+            mel_start_emb = self.gpt.mel_embedding(mel_start)
+            mel_start_emb = mel_start_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(0)
+            input_emb = mx.concatenate([input_emb, mel_start_emb], axis=1)
+
+            # Generate mel codes autoregressively
+            mel_codes = []
+            cache = None
+            gpt_start = time.perf_counter()
+
+            for i in range(max_mel_tokens):
+                if cache is None:
+                    next_token, _, cache = self.gpt.generate_step(
+                        input_emb, cache, temperature, top_k, top_p,
+                        repetition_penalty, mel_codes
+                    )
+                else:
+                    # Only feed the last token
+                    last_token = mx.array([[mel_codes[-1]]], dtype=mx.int32)
+                    last_emb = self.gpt.mel_embedding(last_token)
+                    mel_pos = len(mel_codes) + 1
+                    last_emb = last_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(mel_pos)
+                    next_token, _, cache = self.gpt.generate_step(
+                        last_emb, cache, temperature, top_k, top_p,
+                        repetition_penalty, mel_codes
+                    )
+
+                token_id = next_token[0].item()
+
+                # Check for stop token
+                if token_id == self.gpt.stop_mel_token:
+                    break
+
+                mel_codes.append(token_id)
+                mx.eval(cache)  # Ensure cache is computed
+
+                if verbose and (i + 1) % 100 == 0:
+                    print(f"  Generated {i + 1} mel tokens...")
+
+            # Warn if generation stopped due to max tokens
+            if len(mel_codes) >= max_mel_tokens - 1:
+                warnings.warn(
+                    f"Generation stopped due to exceeding max_mel_tokens ({max_mel_tokens}). "
+                    f"Consider reducing max_text_tokens_per_segment ({max_text_tokens_per_segment}) "
+                    f"or increasing max_mel_tokens.",
+                    RuntimeWarning,
                 )
-            else:
-                # Only feed the last token
-                last_token = mx.array([[mel_codes[-1]]], dtype=mx.int32)
-                last_emb = self.gpt.mel_embedding(last_token)
-                # Position calculation matches PyTorch: attention_mask.shape[1] - mel_len
-                # In PyTorch: mel_len = inputs_embeds.shape[1] (without start_mel_token)
-                #             attention_mask starts at mel_len + 1, grows by 1 each step
-                # So position for first generated token = (mel_len + 2) - mel_len = 2
-                # Position = len(mel_codes) + 1 (since mel_codes[0] is at position 2)
-                mel_pos = len(mel_codes) + 1
-                last_emb = last_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(mel_pos)
-                next_token, _, cache = self.gpt.generate_step(
-                    last_emb, cache, temperature, top_k, top_p
-                )
 
-            token_id = next_token[0].item()
+            gpt_end = time.perf_counter()
+            total_gpt_time += gpt_end - gpt_start
 
-            # Check for stop token
-            if token_id == self.gpt.stop_mel_token:
-                break
+            total_mel_tokens += len(mel_codes)
 
-            mel_codes.append(token_id)
-            mx.eval(cache)  # Ensure cache is computed
+            if verbose:
+                print(f"  Segment {seg_idx + 1}: {len(mel_codes)} mel tokens")
 
-            if verbose and (i + 1) % 50 == 0:
-                print(f"Generated {i + 1} mel tokens...")
+            if len(mel_codes) == 0:
+                warnings.warn(f"No mel tokens generated for segment {seg_idx + 1}")
+                continue
 
-        if verbose:
-            print(f"Generated {len(mel_codes)} mel tokens")
+            # Convert to tensor
+            mel_codes_tensor = mx.array(mel_codes, dtype=mx.int32)[None, :]
 
-        if len(mel_codes) == 0:
-            raise RuntimeError("No mel tokens generated")
+            # Get latents for BigVGAN
+            latent_start = time.perf_counter()
+            latents = self.gpt.forward_latent(conditioning, text_tokens, mel_codes_tensor)
+            mx.eval(latents)
+            latent_end = time.perf_counter()
+            total_latent_time += latent_end - latent_start
 
-        # Convert to tensor
-        mel_codes_tensor = mx.array(mel_codes, dtype=mx.int32)[None, :]
+            # Generate audio with BigVGAN
+            bigvgan_start = time.perf_counter()
+            audio = self.bigvgan(latents, ref_mel)
+            audio = audio.squeeze()  # Remove batch and channel dims
 
-        # Get latents for BigVGAN
-        latents = self.gpt.forward_latent(conditioning, text_tokens, mel_codes_tensor)
+            # Clamp
+            audio = mx.clip(audio, -1.0, 1.0)
+            mx.eval(audio)
+            bigvgan_end = time.perf_counter()
+            total_bigvgan_time += bigvgan_end - bigvgan_start
 
-        # Generate audio with BigVGAN
-        audio = self.bigvgan(latents, ref_mel)
-        audio = audio.squeeze()  # Remove batch and channel dims
+            all_audio.append(audio)
 
-        # Clamp and convert
-        audio = mx.clip(audio, -1.0, 1.0)
+        if len(all_audio) == 0:
+            raise RuntimeError("No audio generated")
+
+        # Concatenate all segments
+        if len(all_audio) == 1:
+            final_audio = all_audio[0]
+        else:
+            final_audio = mx.concatenate(all_audio, axis=0)
 
         if verbose:
             elapsed = time.perf_counter() - start_time
-            audio_duration = len(audio) / self.sample_rate
+            audio_duration = len(final_audio) / self.sample_rate
             rtf = elapsed / audio_duration
             print(f"Generated {audio_duration:.2f}s audio in {elapsed:.2f}s (RTF: {rtf:.3f})")
+            print(f"Total mel tokens: {total_mel_tokens}")
+            print(f"  GPT gen: {total_gpt_time:.2f}s")
+            print(f"  Latent: {total_latent_time:.2f}s")
+            print(f"  BigVGAN: {total_bigvgan_time:.2f}s")
 
-        return audio
+        return final_audio
 
     def generate_stream(
         self,
@@ -424,6 +487,7 @@ class IndexTTS:
         text: str,
         output_path: Optional[Union[str, Path]] = None,
         verbose: bool = False,
+        max_text_tokens_per_segment: int = 120,
         **kwargs,
     ) -> Union[str, tuple]:
         """Inference interface compatible with original IndexTTS.
@@ -433,12 +497,17 @@ class IndexTTS:
             text: Input text
             output_path: Output audio path (optional)
             verbose: Whether to print progress
+            max_text_tokens_per_segment: Maximum text tokens per segment
             **kwargs: Additional generation parameters
 
         Returns:
             Output path if provided, else (sample_rate, audio_data) tuple
         """
-        audio = self.generate(text, audio_prompt, verbose=verbose, **kwargs)
+        audio = self.generate(
+            text, audio_prompt, verbose=verbose,
+            max_text_tokens_per_segment=max_text_tokens_per_segment,
+            **kwargs
+        )
 
         if output_path:
             self.save_audio(audio, output_path)

@@ -1,11 +1,24 @@
 """Tokenizer for IndexTTS using SentencePiece BPE."""
 
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union
 
 import sentencepiece as spm
 
 from mlx_indextts.normalize import TextNormalizer, tokenize_by_cjk_char
+
+
+# Punctuation marks that indicate sentence boundaries
+PUNCTUATION_MARKS_TOKENS = [
+    ".",
+    "!",
+    "?",
+    "▁.",
+    # "▁!", # unk in some tokenizers
+    "▁?",
+    "▁...",  # ellipsis
+]
 
 
 class TextTokenizer:
@@ -117,51 +130,128 @@ class TextTokenizer:
     def split_segments(
         self,
         tokens: List[str],
-        max_tokens_per_segment: int = 100,
+        max_tokens_per_segment: int = 120,
     ) -> List[List[str]]:
-        """Split token list into segments.
+        """Split token list into segments at natural boundaries.
 
-        This helps handle long texts by splitting them into
-        manageable chunks for the model.
+        This handles long texts by splitting them at sentence boundaries
+        (punctuation marks), with fallback to comma/hyphen splits.
+        Matches the behavior of the original PyTorch IndexTTS implementation.
 
         Args:
-            tokens: List of tokens
+            tokens: List of tokens from tokenize()
+            max_tokens_per_segment: Maximum tokens per segment (default: 120)
+
+        Returns:
+            List of token segments
+        """
+        return self._split_segments_by_token(
+            tokens,
+            split_tokens=PUNCTUATION_MARKS_TOKENS,
+            max_tokens_per_segment=max_tokens_per_segment,
+        )
+
+    @staticmethod
+    def _split_segments_by_token(
+        tokenized_str: List[str],
+        split_tokens: List[str],
+        max_tokens_per_segment: int,
+    ) -> List[List[str]]:
+        """Split tokenized text by specific tokens.
+
+        Implements recursive splitting logic:
+        1. First tries to split at sentence-ending punctuation
+        2. Falls back to comma splits if no punctuation found
+        3. Falls back to hyphen splits if no comma found
+        4. Force splits at max_tokens_per_segment if necessary
+
+        Args:
+            tokenized_str: List of tokens
+            split_tokens: Tokens to split on (e.g., [".", "!", "?"])
             max_tokens_per_segment: Maximum tokens per segment
 
         Returns:
             List of token segments
         """
-        if len(tokens) <= max_tokens_per_segment:
-            return [tokens]
+        if len(tokenized_str) == 0:
+            return []
 
-        segments = []
+        segments: List[List[str]] = []
         current_segment = []
+        current_segment_len = 0
 
-        for token in tokens:
+        i = 0
+        while i < len(tokenized_str):
+            token = tokenized_str[i]
             current_segment.append(token)
+            current_segment_len += 1
 
-            # Check if we should split
-            if len(current_segment) >= max_tokens_per_segment:
-                # Try to split at a natural boundary
-                # Look for punctuation or space tokens
-                split_idx = len(current_segment)
-                for i in range(len(current_segment) - 1, max(0, len(current_segment) - 20), -1):
-                    t = current_segment[i]
-                    # Check for sentence-ending punctuation
-                    if any(p in t for p in ["。", ".", "!", "?", "！", "？", "；", ";"]):
-                        split_idx = i + 1
-                        break
-                    # Check for comma or other natural breaks
-                    elif any(p in t for p in ["，", ",", "、"]):
-                        split_idx = i + 1
-                        break
+            # Check for recursive splitting opportunities
+            if not ("," in split_tokens or "▁," in split_tokens) and \
+               ("," in current_segment or "▁," in current_segment):
+                # No comma in split_tokens, but current segment has comma -> recurse
+                sub_segments = TextTokenizer._split_segments_by_token(
+                    current_segment, [",", "▁,"], max_tokens_per_segment
+                )
+                segments.extend(sub_segments)
+                current_segment = []
+                current_segment_len = 0
+            elif "-" not in split_tokens and "-" in current_segment:
+                # No hyphen in split_tokens, but current segment has hyphen -> recurse
+                sub_segments = TextTokenizer._split_segments_by_token(
+                    current_segment, ["-"], max_tokens_per_segment
+                )
+                segments.extend(sub_segments)
+                current_segment = []
+                current_segment_len = 0
+            elif current_segment_len <= max_tokens_per_segment:
+                # Normal case: check if we hit a split token
+                if token in split_tokens and current_segment_len > 2:
+                    # Check if next token is a quote (don't split before quote)
+                    if i < len(tokenized_str) - 1:
+                        next_token = tokenized_str[i + 1]
+                        if next_token in ["'", "▁'"]:
+                            current_segment.append(next_token)
+                            i += 1
+                            current_segment_len += 1
+                    segments.append(current_segment)
+                    current_segment = []
+                    current_segment_len = 0
+            else:
+                # Exceeded max length -> force split
+                sub_segments = []
+                for j in range(0, len(current_segment), max_tokens_per_segment):
+                    end_idx = min(j + max_tokens_per_segment, len(current_segment))
+                    sub_segments.append(current_segment[j:end_idx])
+                warnings.warn(
+                    f"Segment length ({len(current_segment)}) exceeds limit ({max_tokens_per_segment}). "
+                    f"Force splitting may cause unexpected behavior.",
+                    RuntimeWarning,
+                )
+                segments.extend(sub_segments)
+                current_segment = []
+                current_segment_len = 0
 
-                # Split segment
-                segments.append(current_segment[:split_idx])
-                current_segment = current_segment[split_idx:]
+            i += 1
 
         # Add remaining tokens
-        if current_segment:
+        if current_segment_len > 0:
             segments.append(current_segment)
 
-        return segments
+        # Merge short adjacent segments
+        merged_segments = []
+        for segment in segments:
+            if len(segment) == 0:
+                continue
+            if len(merged_segments) == 0:
+                merged_segments.append(segment)
+            elif len(merged_segments[-1]) + len(segment) <= max_tokens_per_segment // 2:
+                # Merge if combined length is less than half max
+                merged_segments[-1] = merged_segments[-1] + segment
+            elif len(merged_segments[-1]) + len(segment) <= max_tokens_per_segment:
+                # Merge if combined length fits within max
+                merged_segments[-1] = merged_segments[-1] + segment
+            else:
+                merged_segments.append(segment)
+
+        return merged_segments

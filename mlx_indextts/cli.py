@@ -72,15 +72,23 @@ def generate_command(args):
         v2_only_params.append('--emotion')
     if getattr(args, 'emo_alpha', 1.0) != 1.0:
         v2_only_params.append('--emo-alpha')
-    if getattr(args, 'steps', 25) != 25:
-        v2_only_params.append('--steps')
-    if getattr(args, 'cfg', 0.7) != 0.7:
-        v2_only_params.append('--cfg')
+    if getattr(args, 'diffusion_steps', 25) != 25:
+        v2_only_params.append('--diffusion-steps')
+    if getattr(args, 'cfg_rate', 0.7) != 0.7:
+        v2_only_params.append('--cfg-rate')
+    if getattr(args, 'interval_silence', 200) != 200:
+        v2_only_params.append('--interval-silence')
 
     if version == "1.5" and v2_only_params:
         print(f"Error: Parameters {v2_only_params} are only available for IndexTTS 2.0 models.")
         print(f"Detected model version: 1.5")
         sys.exit(1)
+
+    # Default temperature based on version
+    if args.temperature is None:
+        temperature = 0.8 if version == "2.0" else 1.0
+    else:
+        temperature = args.temperature
 
     # Default max_tokens based on version (use config defaults)
     # v1.5: 800, v2.0: 1500 (model supports up to 1815)
@@ -93,6 +101,9 @@ def generate_command(args):
     memory_limit = args.memory_limit
     if memory_limit is None:
         memory_limit = 12.0 if version == "2.0" else 8.0
+
+    # Get max_text_tokens_per_segment (default 120)
+    max_text_tokens = getattr(args, 'max_text_tokens', 120)
 
     # Parse quantize option
     quantize_bits = None
@@ -118,11 +129,14 @@ def generate_command(args):
             reference_audio=args.ref_audio,
             output_path=args.output,
             max_mel_tokens=max_tokens,
-            temperature=args.temperature,
+            max_text_tokens_per_segment=max_text_tokens,
+            interval_silence=getattr(args, 'interval_silence', 200),
+            temperature=temperature,
             top_k=args.top_k,
             top_p=args.top_p,
-            diffusion_steps=getattr(args, 'steps', 25),
-            cfg_rate=getattr(args, 'cfg', 0.7),
+            repetition_penalty=getattr(args, 'repetition_penalty', 10.0),
+            diffusion_steps=getattr(args, 'diffusion_steps', 25),
+            cfg_rate=getattr(args, 'cfg_rate', 0.7),
             emotion=getattr(args, 'emotion', None),
             emo_alpha=getattr(args, 'emo_alpha', 1.0),
             seed=getattr(args, 'seed', None),
@@ -142,9 +156,11 @@ def generate_command(args):
             text=args.text,
             ref_audio=args.ref_audio,
             max_mel_tokens=max_tokens,
-            temperature=args.temperature,
+            max_text_tokens_per_segment=max_text_tokens,
+            temperature=temperature,
             top_k=args.top_k,
             top_p=args.top_p,
+            repetition_penalty=getattr(args, 'repetition_penalty', 10.0),
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
         )
@@ -276,13 +292,19 @@ def main():
         "--max-tokens",
         type=int,
         default=None,
-        help="Maximum mel tokens to generate (default: 800)",
+        help="Maximum mel tokens to generate per segment (default: 800 for v1.5, 1500 for v2.0)",
+    )
+    generate_parser.add_argument(
+        "--max-text-tokens",
+        type=int,
+        default=120,
+        help="Maximum text tokens per segment for long text splitting (default: 120)",
     )
     generate_parser.add_argument(
         "--temperature",
         type=float,
-        default=1.0,
-        help="Sampling temperature (default: 1.0)",
+        default=None,
+        help="Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)",
     )
     generate_parser.add_argument(
         "--top-k",
@@ -295,6 +317,12 @@ def main():
         type=float,
         default=0.8,
         help="Top-p (nucleus) sampling (default: 0.8)",
+    )
+    generate_parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=10.0,
+        help="Repetition penalty to avoid repeated tokens (default: 10.0)",
     )
     generate_parser.add_argument(
         "--seed",
@@ -330,13 +358,19 @@ def main():
     )
     # v2.0 specific options
     generate_parser.add_argument(
-        "--steps",
+        "--interval-silence",
+        type=int,
+        default=200,
+        help="[v2.0 only] Silence duration (ms) between segments (default: 200)",
+    )
+    generate_parser.add_argument(
+        "--diffusion-steps",
         type=int,
         default=25,
         help="[v2.0 only] S2Mel diffusion/CFM sampling steps (default: 25)",
     )
     generate_parser.add_argument(
-        "--cfg",
+        "--cfg-rate",
         type=float,
         default=0.7,
         help="[v2.0 only] Classifier-Free Guidance rate (default: 0.7)",

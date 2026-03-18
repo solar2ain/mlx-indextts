@@ -2,12 +2,13 @@
 """Generate test audio using both MLX and PyTorch versions.
 
 Usage:
-    uv run python scripts/generate_test_audio.py               # Quantization benchmark (default)
-    uv run python scripts/generate_test_audio.py --v20-only    # Only test v2.0
-    uv run python scripts/generate_test_audio.py --no-quantize-test --mlx-only  # Regular test without quantization
+    uv run python scripts/generate_test_audio.py                    # Default: Chinese + English test
+    uv run python scripts/generate_test_audio.py --quantize-test    # Quantization benchmark (fp32, 8-bit, 4-bit)
+    uv run python scripts/generate_test_audio.py --emotion-test     # v2.0 emotion test (happy, sad)
+    uv run python scripts/generate_test_audio.py -t "Hello" -r voice.wav  # Custom text/audio
+    uv run python scripts/generate_test_audio.py --v20-only --mlx-only    # Only MLX v2.0
 
-Output files will be saved to the current directory with format:
-    test_{version}_{lang}.wav
+Output files will be saved to test_outputs/ directory.
 """
 
 import subprocess
@@ -27,7 +28,8 @@ SHORT_TEXT = "这是一个简短的测试文本，用于快速验证量化效果
 MLX_PROJECT = Path(__file__).parent.parent
 PYTORCH_PROJECT = Path.home() / "Projects/index-tts"
 REF_AUDIO = MLX_PROJECT / "ref_audios/voice_01.wav"
-OUTPUT_DIR = MLX_PROJECT
+OUTPUT_DIR = MLX_PROJECT / "test_outputs"
+SPEAKER_V20_CACHE = OUTPUT_DIR / "speaker_v20_cache.npz"
 
 
 @dataclass
@@ -80,6 +82,16 @@ def parse_mlx_output(output: str, result: TestResult):
         result.audio_duration = float(m.group(1))
         result.total_time = float(m.group(2))
         result.rtf = float(m.group(3))
+
+    # v1.5 GPT gen: 8.50s
+    m = re.search(r'GPT gen: ([\d.]+)s', output)
+    if m:
+        result.gpt_time = float(m.group(1))
+
+    # v1.5 BigVGAN: 1.50s
+    m = re.search(r'BigVGAN: ([\d.]+)s', output)
+    if m:
+        result.bigvgan_time = float(m.group(1))
 
     # Peak memory: 1234.5 MB
     m = re.search(r'Peak memory: ([\d.]+)\s*MB', output)
@@ -156,20 +168,28 @@ def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestR
     return result
 
 
-def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None) -> TestResult:
+def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None, emotion: Optional[str] = None, emo_alpha: float = 1.0, use_speaker_cache: bool = True) -> TestResult:
     """Generate using MLX v2.0."""
-    name = f"MLX v2.0" + (f" q{quantize}" if quantize else "")
+    name = f"MLX v2.0" + (f" q{quantize}" if quantize else "") + (f" {emotion}" if emotion else "")
     result = TestResult(name=name, output_file=output)
+
+    # Use speaker cache for faster testing
+    ref_audio = REF_AUDIO
+    if use_speaker_cache:
+        ref_audio = ensure_v20_speaker_cache(REF_AUDIO, SPEAKER_V20_CACHE)
+
     cmd = [
         "uv", "run", "mlx-indextts", "generate",
         "-m", str(MLX_PROJECT / "models/mlx-indexTTS-2.0"),
-        "-r", str(REF_AUDIO),
+        "-r", str(ref_audio),
         "-t", text,
         "-o", output,
         "-v"
     ]
     if quantize:
         cmd.extend(["--quantize", quantize])
+    if emotion:
+        cmd.extend(["--emotion", emotion, "--emo-alpha", str(emo_alpha)])
 
     print(f"\n{'='*60}")
     print(f"{name} -> {output}")
@@ -232,22 +252,29 @@ print(f"Saved: {output}")
     return result
 
 
-def run_pytorch_v20(text: str, output: str) -> TestResult:
+def run_pytorch_v20(text: str, output: str, emotion: Optional[str] = None, emo_alpha: float = 1.0) -> TestResult:
     """Generate using PyTorch v2.0."""
-    result = TestResult(name="PyTorch v2.0", output_file=output)
+    name = "PyTorch v2.0" + (f" {emotion}" if emotion else "")
+    result = TestResult(name=name, output_file=output)
     model_dir = PYTORCH_PROJECT / "indexTTS-2"
     cfg_path = model_dir / "config.yaml"
+
+    # Build emotion args
+    emotion_args = ""
+    if emotion:
+        emotion_args = f', emotion="{emotion}", emo_alpha={emo_alpha}'
+
     script = f'''
 import sys
 sys.path.insert(0, "{PYTORCH_PROJECT}")
 from indextts.infer_v2 import IndexTTS2
 
 tts = IndexTTS2(cfg_path="{cfg_path}", model_dir="{model_dir}", device="mps")
-tts.infer("{REF_AUDIO}", "{text}", "{output}")
+tts.infer("{REF_AUDIO}", "{text}", "{output}"{emotion_args})
 print(f"Saved: {output}")
 '''
     print(f"\n{'='*60}")
-    print(f"PyTorch v2.0 -> {output}")
+    print(f"{name} -> {output}")
     print(f"{'='*60}")
 
     try:
@@ -284,12 +311,50 @@ def get_metal_memory() -> float:
         return 0.0
 
 
-def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True):
+def ensure_v20_speaker_cache(ref_audio: Path, cache_path: Path) -> Path:
+    """Pre-compute v2.0 speaker cache if not exists or outdated.
+
+    Returns the cache path to use as ref_audio.
+    """
+    # Check if cache exists and is newer than ref_audio
+    if cache_path.exists():
+        if cache_path.stat().st_mtime >= ref_audio.stat().st_mtime:
+            print(f"Using cached speaker: {cache_path}")
+            return cache_path
+        else:
+            print(f"Speaker cache outdated, regenerating...")
+    else:
+        print(f"Pre-computing v2.0 speaker conditioning...")
+
+    # Generate speaker cache
+    cmd = [
+        "uv", "run", "mlx-indextts", "speaker",
+        "-m", str(MLX_PROJECT / "models/mlx-indexTTS-2.0"),
+        "-r", str(ref_audio),
+        "-o", str(cache_path),
+    ]
+
+    try:
+        proc = subprocess.run(cmd, cwd=MLX_PROJECT, capture_output=True, text=True)
+        if proc.returncode == 0:
+            print(f"Speaker cache saved: {cache_path}")
+            return cache_path
+        else:
+            print(f"Failed to create speaker cache: {proc.stderr}")
+            return ref_audio  # Fallback to original audio
+    except Exception as e:
+        print(f"Error creating speaker cache: {e}")
+        return ref_audio
+
+
+def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True, text: Optional[str] = None, use_speaker_cache: bool = True):
     """Run quantization benchmark comparing fp32, 8-bit, and 4-bit."""
+    test_text = text if text else CHINESE_TEXT
+
     print("\n" + "="*80)
     print("QUANTIZATION BENCHMARK")
     print("="*80)
-    print(f"Text: {CHINESE_TEXT[:50]}...")
+    print(f"Text: {test_text[:50]}...")
     print(f"Reference: {REF_AUDIO}")
 
     results = []
@@ -300,7 +365,7 @@ def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True):
         for q in [None, "8", "4"]:
             q_label = q if q else "fp32"
             output = str(OUTPUT_DIR / f"test_v15_q{q_label}.wav")
-            result = run_mlx_v15(CHINESE_TEXT, output, quantize=q)
+            result = run_mlx_v15(test_text, output, quantize=q)
             results.append(result)
 
     # Test v2.0 with different quantization levels
@@ -309,11 +374,54 @@ def run_quantize_benchmark(run_v15: bool = True, run_v20: bool = True):
         for q in [None, "8", "4"]:
             q_label = q if q else "fp32"
             output = str(OUTPUT_DIR / f"test_v20_q{q_label}.wav")
-            result = run_mlx_v20(CHINESE_TEXT, output, quantize=q)
+            result = run_mlx_v20(test_text, output, quantize=q, use_speaker_cache=use_speaker_cache)
             results.append(result)
 
     # Print quantization summary
     print_quantize_summary(results)
+
+    return results
+
+
+def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, use_speaker_cache: bool = True):
+    """Run emotion benchmark for v2.0 (MLX and PyTorch)."""
+    test_text = text if text else "今天真是太开心了！我收到了期待已久的礼物，心情特别好！"
+
+    print("\n" + "="*80)
+    print("EMOTION BENCHMARK (v2.0)")
+    print("="*80)
+    print(f"Text: {test_text[:50]}...")
+    print(f"Reference: {REF_AUDIO}")
+
+    results = []
+
+    # MLX tests
+    print("\n--- MLX Baseline (no emotion) ---")
+    output = str(OUTPUT_DIR / "test_mlx_v20_no_emotion.wav")
+    result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
+    results.append(result)
+
+    for emotion in ["happy", "sad"]:
+        print(f"\n--- MLX Emotion: {emotion} ---")
+        output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
+        result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=0.8, use_speaker_cache=use_speaker_cache)
+        results.append(result)
+
+    # PyTorch tests
+    if run_pytorch:
+        print("\n--- PyTorch Baseline (no emotion) ---")
+        output = str(OUTPUT_DIR / "test_pytorch_v20_no_emotion.wav")
+        result = run_pytorch_v20(test_text, output)
+        results.append(result)
+
+        for emotion in ["happy", "sad"]:
+            print(f"\n--- PyTorch Emotion: {emotion} ---")
+            output = str(OUTPUT_DIR / f"test_pytorch_v20_emotion_{emotion}.wav")
+            result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=0.8)
+            results.append(result)
+
+    # Print summary
+    print_summary(results)
 
     return results
 
@@ -391,6 +499,8 @@ def print_summary(results: List[TestResult]):
 
 
 def main():
+    global REF_AUDIO, OUTPUT_DIR, SPEAKER_V20_CACHE
+
     import argparse
     parser = argparse.ArgumentParser(description="Generate test audio")
     parser.add_argument("--mlx-only", action="store_true", help="Only run MLX versions")
@@ -399,15 +509,37 @@ def main():
     parser.add_argument("--v20-only", action="store_true", help="Only run v2.0")
     parser.add_argument("--chinese-only", action="store_true", help="Only Chinese")
     parser.add_argument("--english-only", action="store_true", help="Only English")
-    parser.add_argument("--no-quantize-test", action="store_true", help="Skip quantization comparison")
+    parser.add_argument("--quantize-test", action="store_true", help="Run quantization benchmark (fp32, 8-bit, 4-bit)")
     parser.add_argument("-q", "--quantize", type=str, default=None, help="Quantization level (4, 8, or fp32)")
+    parser.add_argument("-t", "--text", type=str, default=None, help="Custom text to synthesize")
+    parser.add_argument("-r", "--ref-audio", type=str, default=None, help="Custom reference audio file")
+    parser.add_argument("-o", "--output-dir", type=str, default=None, help="Output directory (default: test_outputs/)")
+    parser.add_argument("--emotion-test", action="store_true", help="Run v2.0 emotion test (happy, sad)")
+    parser.add_argument("--no-speaker-cache", action="store_true", help="Disable v2.0 speaker cache (use raw audio)")
     args = parser.parse_args()
 
-    # Run quantization benchmark by default (unless --no-quantize-test)
-    if not args.no_quantize_test and not args.pytorch_only:
+    # Update paths if specified
+    if args.ref_audio:
+        REF_AUDIO = Path(args.ref_audio).expanduser().resolve()
+    if args.output_dir:
+        OUTPUT_DIR = Path(args.output_dir).expanduser().resolve()
+        SPEAKER_V20_CACHE = OUTPUT_DIR / "speaker_v20_cache.npz"
+
+    # Ensure output directory exists
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Run emotion benchmark if requested
+    if args.emotion_test:
+        run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, use_speaker_cache=not args.no_speaker_cache)
+        return
+
+    # Run quantization benchmark if requested
+    if args.quantize_test:
         run_quantize_benchmark(
             run_v15=not args.v20_only,
             run_v20=not args.v15_only,
+            text=args.text,
+            use_speaker_cache=not args.no_speaker_cache,
         )
         return
 
@@ -419,44 +551,63 @@ def main():
     run_chinese = not args.english_only
     run_english = not args.chinese_only
 
+    # Use custom text if provided
+    chinese_text = args.text if args.text else CHINESE_TEXT
+    english_text = args.text if args.text else ENGLISH_TEXT
+
     print("Test Audio Generation")
     print(f"  Reference: {REF_AUDIO}")
     print(f"  Output dir: {OUTPUT_DIR}")
     print(f"  MLX: {run_mlx}, PyTorch: {run_pytorch}")
     print(f"  v1.5: {run_v15}, v2.0: {run_v20}")
-    print(f"  Chinese: {run_chinese}, English: {run_english}")
+    if args.text:
+        print(f"  Text: {args.text[:50]}...")
+    else:
+        print(f"  Chinese: {run_chinese}, English: {run_english}")
     if args.quantize:
         print(f"  Quantize: {args.quantize}")
 
     results: List[TestResult] = []
+    use_speaker_cache = not args.no_speaker_cache
 
-    # MLX v1.5
-    if run_mlx and run_v15:
-        if run_chinese:
-            results.append(run_mlx_v15(CHINESE_TEXT, str(OUTPUT_DIR / "test_mlx_v15_chinese.wav"), args.quantize))
-        if run_english:
-            results.append(run_mlx_v15(ENGLISH_TEXT, str(OUTPUT_DIR / "test_mlx_v15_english.wav"), args.quantize))
+    # If custom text provided, use unified output names
+    if args.text:
+        if run_mlx and run_v15:
+            results.append(run_mlx_v15(args.text, str(OUTPUT_DIR / "test_mlx_v15.wav"), args.quantize))
+        if run_mlx and run_v20:
+            results.append(run_mlx_v20(args.text, str(OUTPUT_DIR / "test_mlx_v20.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
+        if run_pytorch and run_v15:
+            results.append(run_pytorch_v15(args.text, str(OUTPUT_DIR / "test_pytorch_v15.wav")))
+        if run_pytorch and run_v20:
+            results.append(run_pytorch_v20(args.text, str(OUTPUT_DIR / "test_pytorch_v20.wav")))
+    else:
+        # MLX v1.5
+        if run_mlx and run_v15:
+            if run_chinese:
+                results.append(run_mlx_v15(chinese_text, str(OUTPUT_DIR / "test_mlx_v15_chinese.wav"), args.quantize))
+            if run_english:
+                results.append(run_mlx_v15(english_text, str(OUTPUT_DIR / "test_mlx_v15_english.wav"), args.quantize))
 
-    # MLX v2.0
-    if run_mlx and run_v20:
-        if run_chinese:
-            results.append(run_mlx_v20(CHINESE_TEXT, str(OUTPUT_DIR / "test_mlx_v20_chinese.wav"), args.quantize))
-        if run_english:
-            results.append(run_mlx_v20(ENGLISH_TEXT, str(OUTPUT_DIR / "test_mlx_v20_english.wav"), args.quantize))
+        # MLX v2.0
+        if run_mlx and run_v20:
+            if run_chinese:
+                results.append(run_mlx_v20(chinese_text, str(OUTPUT_DIR / "test_mlx_v20_chinese.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
+            if run_english:
+                results.append(run_mlx_v20(english_text, str(OUTPUT_DIR / "test_mlx_v20_english.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
 
-    # PyTorch v1.5
-    if run_pytorch and run_v15:
-        if run_chinese:
-            results.append(run_pytorch_v15(CHINESE_TEXT, str(OUTPUT_DIR / "test_pytorch_v15_chinese.wav")))
-        if run_english:
-            results.append(run_pytorch_v15(ENGLISH_TEXT, str(OUTPUT_DIR / "test_pytorch_v15_english.wav")))
+        # PyTorch v1.5
+        if run_pytorch and run_v15:
+            if run_chinese:
+                results.append(run_pytorch_v15(chinese_text, str(OUTPUT_DIR / "test_pytorch_v15_chinese.wav")))
+            if run_english:
+                results.append(run_pytorch_v15(english_text, str(OUTPUT_DIR / "test_pytorch_v15_english.wav")))
 
-    # PyTorch v2.0
-    if run_pytorch and run_v20:
-        if run_chinese:
-            results.append(run_pytorch_v20(CHINESE_TEXT, str(OUTPUT_DIR / "test_pytorch_v20_chinese.wav")))
-        if run_english:
-            results.append(run_pytorch_v20(ENGLISH_TEXT, str(OUTPUT_DIR / "test_pytorch_v20_english.wav")))
+        # PyTorch v2.0
+        if run_pytorch and run_v20:
+            if run_chinese:
+                results.append(run_pytorch_v20(chinese_text, str(OUTPUT_DIR / "test_pytorch_v20_chinese.wav")))
+            if run_english:
+                results.append(run_pytorch_v20(english_text, str(OUTPUT_DIR / "test_pytorch_v20_english.wav")))
 
     # Print summary
     if results:
