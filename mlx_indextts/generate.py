@@ -325,6 +325,7 @@ class IndexTTS:
         ref_audio: Union[str, Path, mx.array],
         max_mel_tokens: int = 600,
         max_text_tokens_per_segment: int = 120,
+        interval_silence: int = 200,
         temperature: float = 1.0,
         top_k: int = 30,
         top_p: float = 0.8,
@@ -340,13 +341,14 @@ class IndexTTS:
             ref_audio: Reference audio for voice cloning
             max_mel_tokens: Maximum mel tokens to generate per segment
             max_text_tokens_per_segment: Maximum text tokens per segment (for long text splitting)
+            interval_silence: Silence duration (ms) to insert between segments (default: 200)
             temperature: Sampling temperature
             top_k: Top-k sampling parameter
             top_p: Top-p (nucleus) sampling parameter
             repetition_penalty: Penalty for repeating tokens (default: 10.0)
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
-            segment_overlap_ms: Overlap duration in ms for crossfade between segments (default: 50, 0 to disable)
+            segment_overlap_ms: Overlap duration in ms for crossfade (only used when interval_silence=0)
 
         Returns:
             Generated audio waveform (samples,)
@@ -380,6 +382,13 @@ class IndexTTS:
         total_gpt_time = 0.0
         total_latent_time = 0.0
         total_bigvgan_time = 0.0
+
+        # Create silence for interval (same logic as v2)
+        if interval_silence > 0 and len(segments) > 1:
+            silence_samples = int(self.sample_rate * interval_silence / 1000.0)
+            silence = mx.zeros(silence_samples, dtype=mx.float32)
+        else:
+            silence = None
 
         for seg_idx, segment_tokens in enumerate(segments):
             if verbose and len(segments) > 1:
@@ -476,18 +485,27 @@ class IndexTTS:
 
             all_audio.append(audio)
 
+            # Add silence between segments (not after the last one)
+            if silence is not None and seg_idx < len(segments) - 1:
+                all_audio.append(silence)
+
         if len(all_audio) == 0:
             raise RuntimeError("No audio generated")
 
-        # Concatenate all segments with crossfade for smooth transitions
+        # Concatenate all segments (same logic as v2)
+        # Note: silence segments (if any) are not crossfaded
         if len(all_audio) == 1:
             final_audio = all_audio[0]
-        else:
+        elif segment_overlap_ms > 0 and silence is None:
+            # Apply crossfade when no silence insertion
             final_audio = crossfade_segments(
                 all_audio,
                 sample_rate=self.sample_rate,
                 overlap_ms=segment_overlap_ms,
             )
+        else:
+            # Simple concatenation when silence is used
+            final_audio = mx.concatenate(all_audio, axis=0)
 
         if verbose:
             elapsed = time.perf_counter() - start_time

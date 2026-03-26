@@ -76,8 +76,6 @@ def generate_command(args):
         v2_only_params.append('--diffusion-steps')
     if getattr(args, 'cfg_rate', 0.7) != 0.7:
         v2_only_params.append('--cfg-rate')
-    if getattr(args, 'interval_silence', 200) != 200:
-        v2_only_params.append('--interval-silence')
 
     if version == "1.5" and v2_only_params:
         print(f"Error: Parameters {v2_only_params} are only available for IndexTTS 2.0 models.")
@@ -158,6 +156,7 @@ def generate_command(args):
             ref_audio=args.ref_audio,
             max_mel_tokens=max_tokens,
             max_text_tokens_per_segment=max_text_tokens,
+            interval_silence=getattr(args, 'interval_silence', 200),
             temperature=temperature,
             top_k=args.top_k,
             top_p=args.top_p,
@@ -369,7 +368,7 @@ def main():
         "--interval-silence",
         type=int,
         default=200,
-        help="[v2.0 only] Silence duration (ms) between segments (default: 200)",
+        help="Silence duration (ms) between segments (default: 200)",
     )
     generate_parser.add_argument(
         "--diffusion-steps",

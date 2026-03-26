@@ -178,3 +178,22 @@ class TestTokenizer:
         tokenized = tokenize_by_cjk_char(text)
         assert " 你 " in tokenized
         assert " 好 " in tokenized
+
+    def test_remove_emoji(self):
+        """Test emoji removal from text (replaced with space)."""
+        from mlx_indextts.normalize import remove_emoji
+
+        # Common emojis - replaced with space
+        assert remove_emoji("你好😀世界") == "你好 世界"
+        assert remove_emoji("开心😊") == "开心 "
+        assert remove_emoji("Hello 👋 World") == "Hello   World"
+
+        # Multiple emojis
+        assert remove_emoji("测试🎉🎊🎁") == "测试   "
+
+        # No emoji
+        assert remove_emoji("正常文本") == "正常文本"
+        assert remove_emoji("Hello World") == "Hello World"
+
+        # Emoji at end
+        assert remove_emoji("吃饭了吗？🍲") == "吃饭了吗？ "

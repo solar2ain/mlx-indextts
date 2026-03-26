@@ -5,6 +5,38 @@ import unicodedata
 from typing import List, Optional, Tuple
 
 
+# Emoji Unicode ranges (main blocks from Unicode spec)
+EMOJI_RANGES = [
+    (0x1F600, 0x1F64F),  # Emoticons
+    (0x1F300, 0x1F5FF),  # Misc Symbols and Pictographs
+    (0x1F680, 0x1F6FF),  # Transport and Map
+    (0x1F1E0, 0x1F1FF),  # Flags (regional indicator symbols)
+    (0x2600, 0x26FF),    # Misc symbols
+    (0x2700, 0x27BF),    # Dingbats
+    (0x1F900, 0x1F9FF),  # Supplemental Symbols and Pictographs
+    (0x1FA00, 0x1FAFF),  # Symbols and Pictographs Extended-A
+    (0xFE00, 0xFE0F),    # Variation Selectors
+    (0x200D, 0x200D),    # Zero Width Joiner (for compound emojis)
+]
+
+
+def remove_emoji(text: str) -> str:
+    """Remove emoji characters from text, replacing with space.
+
+    Args:
+        text: Input text
+
+    Returns:
+        Text with emojis replaced by space
+    """
+    result = []
+    for char in text:
+        code = ord(char)
+        is_emoji = any(start <= code <= end for start, end in EMOJI_RANGES)
+        result.append(' ' if is_emoji else char)
+    return ''.join(result)
+
+
 # CJK Unicode ranges
 CJK_RANGES = [
     (0x4E00, 0x9FFF),    # CJK Unified Ideographs
@@ -325,6 +357,9 @@ class TextNormalizer:
         """
         if not text or not text.strip():
             return ""
+
+        # Remove emoji characters (they cause TTS issues)
+        text = remove_emoji(text)
 
         # Expand English contractions
         text = re.sub(self.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)

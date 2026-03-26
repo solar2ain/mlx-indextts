@@ -53,3 +53,7 @@ htmlcov/
 
 # UV
 .python-version
+
+# Claude Code
+CLAUDE.md
+docs/
