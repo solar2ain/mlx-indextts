@@ -159,7 +159,7 @@ class IndexTTSv2:
         self.cfg = OmegaConf.load(self.config_path)
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
 
-        print(f"Loading IndexTTS 2.0...")
+        print("Loading IndexTTS 2.0...")
         print(f"  Config: {self.config_path}")
         print(f"  MLX weights: {self.mlx_model_dir}")
 
@@ -366,7 +366,6 @@ class IndexTTSv2:
 
     def _init_mlx_models(self):
         """Initialize MLX models."""
-        import mlx.nn as nn
         from mlx_indextts.config import IndexTTSConfig
         from mlx_indextts.models.gpt_v2 import UnifiedVoiceV2
         from mlx_indextts.models.s2mel import S2Mel
@@ -742,7 +741,7 @@ class IndexTTSv2:
         diffusion_steps: int = 25,
         cfg_rate: float = 0.7,
         emotion: Optional[Union[str, Dict[str, float]]] = None,
-        emo_alpha: float = 1.0,
+        emo_alpha: float = 0.6,
         seed: Optional[int] = None,
         verbose: bool = False,
         segment_overlap_ms: int = 50,
@@ -766,7 +765,7 @@ class IndexTTSv2:
                 - None: extract from reference audio (default)
                 - str: "happy", "happy:0.8,sad:0.2", or JSON
                 - dict: {"happy": 0.8, "sad": 0.2}
-            emo_alpha: Emotion intensity (0.0=reference audio, 1.0=full specified emotion)
+            emo_alpha: Emotion intensity (0.0=reference audio, 1.0=full specified emotion, default: 0.6)
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
             segment_overlap_ms: Overlap duration in ms for crossfade between segments (default: 50, 0 to disable)

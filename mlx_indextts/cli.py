@@ -70,7 +70,7 @@ def generate_command(args):
     v2_only_params = []
     if getattr(args, 'emotion', None) is not None:
         v2_only_params.append('--emotion')
-    if getattr(args, 'emo_alpha', 1.0) != 1.0:
+    if getattr(args, 'emo_alpha', 0.6) != 0.6:
         v2_only_params.append('--emo-alpha')
     if getattr(args, 'diffusion_steps', 25) != 25:
         v2_only_params.append('--diffusion-steps')
@@ -79,7 +79,7 @@ def generate_command(args):
 
     if version == "1.5" and v2_only_params:
         print(f"Error: Parameters {v2_only_params} are only available for IndexTTS 2.0 models.")
-        print(f"Detected model version: 1.5")
+        print("Detected model version: 1.5")
         sys.exit(1)
 
     # Default temperature based on version
@@ -136,7 +136,7 @@ def generate_command(args):
             diffusion_steps=getattr(args, 'diffusion_steps', 25),
             cfg_rate=getattr(args, 'cfg_rate', 0.7),
             emotion=getattr(args, 'emotion', None),
-            emo_alpha=getattr(args, 'emo_alpha', 1.0),
+            emo_alpha=getattr(args, 'emo_alpha', 0.6),
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
             segment_overlap_ms=getattr(args, 'segment_overlap', 50),
@@ -391,8 +391,8 @@ def main():
     generate_parser.add_argument(
         "--emo-alpha",
         type=float,
-        default=1.0,
-        help="[v2.0 only] Emotion intensity 0.0-1.0 (0=reference audio, 1=full specified, default: 1.0)",
+        default=0.6,
+        help="[v2.0 only] Emotion intensity 0.0-1.0 (0=reference audio, 1=full specified, default: 0.6)",
     )
     generate_parser.set_defaults(func=generate_command)
 

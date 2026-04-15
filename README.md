@@ -72,7 +72,7 @@ uv run mlx-indextts generate \
     -r reference.wav \
     -t "今天真是太开心了！" \
     -o output.wav \
-    --emotion happy --emo-alpha 0.8
+    --emotion happy --emo-alpha 0.6
 ```
 
 ### 3. Pre-compute Speaker (Faster Inference)
@@ -121,7 +121,7 @@ audio = tts.generate(
     reference_audio="reference.wav",
     output_path="output.wav",
     emotion="happy",
-    emo_alpha=0.8,
+    emo_alpha=0.6,
 )
 ```
 
@@ -146,7 +146,7 @@ Common options:
 
 v2.0 only:
   --emotion          Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm
-  --emo-alpha        Emotion intensity 0.0-1.0 (default: 1.0)
+  --emo-alpha        Emotion intensity 0.0-1.0 (default: 0.6, recommend ≤ 0.8)
   --diffusion-steps  Diffusion steps (default: 25)
   --cfg-rate         CFG rate (default: 0.7)
 ```

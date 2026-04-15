@@ -45,7 +45,7 @@ uv run mlx-indextts generate \
     -r <reference_audio.wav> \
     -t "今天真是太开心了！" \
     -o output.wav \
-    --emotion happy --emo-alpha 0.8
+    --emotion happy --emo-alpha 0.6
 ```
 
 **Common Parameters:**
@@ -64,7 +64,7 @@ uv run mlx-indextts generate \
 
 **v2.0-only Parameters:**
 - `--emotion`: Emotion control: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm
-- `--emo-alpha`: Emotion intensity 0.0-1.0 (default: 1.0, 0=reference audio emotion)
+- `--emo-alpha`: Emotion intensity 0.0-1.0 (default: 0.6, 0=reference audio emotion). Recommend keeping at or below 0.8 — higher values may cause unnatural artifacts.
 - `--diffusion-steps`: Diffusion steps (default: 25)
 - `--cfg-rate`: CFG rate (default: 0.7)
 
@@ -170,7 +170,7 @@ audio = tts.generate(
     reference_audio="./reference.wav",
     output_path="./output.wav",
     emotion="happy",
-    emo_alpha=0.8,
+    emo_alpha=0.6,
 )
 ```
 
@@ -195,7 +195,7 @@ uv run mlx-indextts generate \
     -r person_recording.wav \
     -t "I'm so happy today!" \
     -o output.wav \
-    --emotion happy --emo-alpha 0.8 --play
+    --emotion happy --emo-alpha 0.6 --play
 ```
 
 ### 3. Ensure reproducible generation
