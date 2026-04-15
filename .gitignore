@@ -45,8 +45,10 @@ ref_audios/
 /output*.wav
 /tmp/
 
-# Test outputs
+# Benchmark outputs
 test_outputs/
+benchmark_outputs/
+test_benchmark/
 .pytest_cache/
 .coverage
 htmlcov/

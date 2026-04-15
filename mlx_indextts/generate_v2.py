@@ -29,7 +29,7 @@ import mlx.nn as nn
 
 from omegaconf import OmegaConf
 
-from mlx_indextts.generate import crossfade_segments
+from mlx_indextts.generate import compress_silence, crossfade_segments, time_stretch_wsola
 
 
 # 8 emotion categories in IndexTTS 2.0
@@ -745,6 +745,7 @@ class IndexTTSv2:
         seed: Optional[int] = None,
         verbose: bool = False,
         segment_overlap_ms: int = 50,
+        speed: float = 1.0,
     ) -> np.ndarray:
         """Generate speech from text.
 
@@ -936,6 +937,12 @@ class IndexTTSv2:
                     RuntimeWarning,
                 )
 
+            # Compress long silence runs
+            orig_len = len(mel_codes)
+            mel_codes = compress_silence(mel_codes)
+            if verbose and len(mel_codes) < orig_len:
+                print(f"  Silence compression: {orig_len} -> {len(mel_codes)} tokens")
+
             total_mel_tokens += len(mel_codes)
 
             if verbose:
@@ -1003,8 +1010,12 @@ class IndexTTSv2:
             vocoder_time = time.perf_counter() - vocoder_start
             total_vocoder_time += vocoder_time
 
-            # Convert to numpy and collect
+            # Convert to numpy, peak normalization + clamp with headroom
             segment_audio = np.array(audio_out[0, 0])
+            peak = np.abs(segment_audio).max()
+            if peak > 1.0:
+                segment_audio = segment_audio / max(peak, 1e-6)
+            segment_audio = np.clip(segment_audio, -0.99, 0.99)
             all_audio.append(segment_audio)
 
             # Add silence between segments (not after the last one)
@@ -1026,6 +1037,12 @@ class IndexTTSv2:
         else:
             # Simple concatenation when silence is used (silence already provides transition)
             audio = np.concatenate(all_audio)
+
+        # Apply speed control via WSOLA time-stretch (no pitch change)
+        if speed != 1.0:
+            audio = time_stretch_wsola(audio, rate=speed, sample_rate=sample_rate)
+            if verbose:
+                print(f"Speed: {speed:.2f}x")
 
         total_time = time.perf_counter() - start_time
         audio_duration = len(audio) / sample_rate

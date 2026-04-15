@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Generate test audio using both MLX and PyTorch versions.
+"""Benchmark audio generation for MLX and PyTorch IndexTTS.
 
 Usage:
-    uv run python scripts/generate_test_audio.py                    # Default: Chinese + English test
-    uv run python scripts/generate_test_audio.py --quantize-test    # Quantization benchmark (fp32, 8-bit, 4-bit)
-    uv run python scripts/generate_test_audio.py --emotion-test     # v2.0 emotion test (happy, sad)
-    uv run python scripts/generate_test_audio.py -t "Hello" -r voice.wav  # Custom text/audio
-    uv run python scripts/generate_test_audio.py --v20-only --mlx-only    # Only MLX v2.0
+    uv run python scripts/test_benchmark.py                    # Default: Chinese + English
+    uv run python scripts/test_benchmark.py --quantize-test    # Quantization benchmark (fp32, 8-bit, 4-bit)
+    uv run python scripts/test_benchmark.py --emotion-test     # v2.0 emotion test
+    uv run python scripts/test_benchmark.py --speed-test       # Speed benchmark (0.75x-1.5x)
+    uv run python scripts/test_benchmark.py -t "Hello" -r voice.wav  # Custom text/audio
+    uv run python scripts/test_benchmark.py --v20-only --mlx-only    # Only MLX v2.0
 
-Output files will be saved to test_outputs/ directory.
+Output files will be saved to test_benchmark/ directory.
 """
 
 import subprocess
@@ -28,8 +29,8 @@ SHORT_TEXT = "这是一个简短的测试文本，用于快速验证量化效果
 MLX_PROJECT = Path(__file__).parent.parent
 PYTORCH_PROJECT = Path.home() / "Projects/index-tts"
 REF_AUDIO = MLX_PROJECT / "ref_audios/voice_01.wav"
-OUTPUT_DIR = MLX_PROJECT / "test_outputs"
-SPEAKER_V20_CACHE = OUTPUT_DIR / "speaker_v20_cache.npz"
+OUTPUT_DIR = MLX_PROJECT / "test_benchmark"
+SPEAKER_V20_CACHE = OUTPUT_DIR / "spk_v20_cache.npz"
 
 
 @dataclass
@@ -132,7 +133,7 @@ def parse_pytorch_output(output: str, result: TestResult):
         result.bigvgan_time = float(m.group(1))
 
 
-def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestResult:
+def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None, speed: float = 1.0) -> TestResult:
     """Generate using MLX v1.5."""
     name = "MLX v1.5" + (f" q{quantize}" if quantize else "")
     result = TestResult(name=name, output_file=output)
@@ -146,6 +147,8 @@ def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestR
     ]
     if quantize:
         cmd.extend(["--quantize", quantize])
+    if speed != 1.0:
+        cmd.extend(["--speed", str(speed)])
 
     print(f"\n{'='*60}")
     print(f"{name} -> {output}")
@@ -168,7 +171,7 @@ def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestR
     return result
 
 
-def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None, emotion: Optional[str] = None, emo_alpha: float = 1.0, use_speaker_cache: bool = True) -> TestResult:
+def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None, emotion: Optional[str] = None, emo_alpha: float = 1.0, use_speaker_cache: bool = True, speed: float = 1.0) -> TestResult:
     """Generate using MLX v2.0."""
     name = "MLX v2.0" + (f" q{quantize}" if quantize else "") + (f" {emotion}" if emotion else "")
     result = TestResult(name=name, output_file=output)
@@ -190,6 +193,8 @@ def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None, emotion:
         cmd.extend(["--quantize", quantize])
     if emotion:
         cmd.extend(["--emotion", emotion, "--emo-alpha", str(emo_alpha)])
+    if speed != 1.0:
+        cmd.extend(["--speed", str(speed)])
 
     print(f"\n{'='*60}")
     print(f"{name} -> {output}")
@@ -332,10 +337,13 @@ def ensure_v20_speaker_cache(ref_audio: Path, cache_path: Path) -> Path:
     """Pre-compute v2.0 speaker cache if not exists or outdated.
 
     Returns the cache path to use as ref_audio.
+    Invalidates cache when ref_audio or key source files change.
     """
-    # Check if cache exists and is newer than ref_audio
     if cache_path.exists():
-        if cache_path.stat().st_mtime >= ref_audio.stat().st_mtime:
+        cache_mtime = cache_path.stat().st_mtime
+        # Invalidate if ref_audio or generation code changed
+        deps = [ref_audio, MLX_PROJECT / "mlx_indextts/generate_v2.py"]
+        if all(cache_mtime >= d.stat().st_mtime for d in deps if d.exists()):
             print(f"Using cached speaker: {cache_path}")
             return cache_path
         else:
@@ -416,12 +424,12 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
     if run_mlx:
         for emotion in ["sad", "happy", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
             print(f"\n--- MLX Emotion: {emotion} ---")
-            output = str(OUTPUT_DIR / f"test_mlx_v20_emotion_{emotion}.wav")
+            output = str(OUTPUT_DIR / f"bench_mlx_v20_emotion_{emotion}.wav")
             result = run_mlx_v20(test_text, output, emotion=emotion, emo_alpha=emo_alpha, use_speaker_cache=use_speaker_cache)
             results.append(result)
 
         print("\n--- MLX Baseline (no emotion) ---")
-        output = str(OUTPUT_DIR / "test_mlx_v20_no_emotion.wav")
+        output = str(OUTPUT_DIR / "bench_mlx_v20_no_emotion.wav")
         result = run_mlx_v20(test_text, output, use_speaker_cache=use_speaker_cache)
         results.append(result)
 
@@ -429,12 +437,12 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
     if run_pytorch:
         for emotion in ["sad", "happy", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"]:
             print(f"\n--- PyTorch Emotion: {emotion} ---")
-            output = str(OUTPUT_DIR / f"test_pytorch_v20_emotion_{emotion}.wav")
+            output = str(OUTPUT_DIR / f"bench_pytorch_v20_emotion_{emotion}.wav")
             result = run_pytorch_v20(test_text, output, emotion=emotion, emo_alpha=emo_alpha)
             results.append(result)
 
         print("\n--- PyTorch Baseline (no emotion) ---")
-        output = str(OUTPUT_DIR / "test_pytorch_v20_no_emotion.wav")
+        output = str(OUTPUT_DIR / "bench_pytorch_v20_no_emotion.wav")
         result = run_pytorch_v20(test_text, output)
         results.append(result)
 
@@ -442,6 +450,61 @@ def run_emotion_benchmark(text: Optional[str] = None, run_pytorch: bool = True, 
     print_summary(results)
 
     return results
+
+
+def run_speed_benchmark(text: Optional[str] = None, run_v15: bool = True, run_v20: bool = True, use_speaker_cache: bool = True, speed: float = 1.0):
+    """Run speed benchmark — generate base audio once, then apply different speeds via WSOLA."""
+    import numpy as np
+    import soundfile as sf
+    from mlx_indextts.generate import time_stretch_wsola
+
+    test_text = text if text else "人工智能正在深刻改变我们的生活方式，从智能手机到自动驾驶，AI技术已经渗透到各个领域。"
+
+    speeds = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5]
+    if speed != 1.0 and speed not in speeds:
+        speeds.append(speed)
+        speeds.sort()
+
+    print("\n" + "=" * 80)
+    print("SPEED BENCHMARK (generate once, stretch offline)")
+    print("=" * 80)
+    print(f"Text: {test_text[:50]}...")
+    print(f"Speeds: {speeds}")
+
+    results = []
+
+    versions = []
+    if run_v15:
+        versions.append(("v15", 24000))
+    if run_v20:
+        versions.append(("v20", 22050))
+
+    for ver, sr in versions:
+        # Step 1: Generate base audio at 1.0x speed
+        base_path = str(OUTPUT_DIR / f"bench_mlx_{ver}_speed_1.00x.wav")
+        if ver == "v15":
+            result = run_mlx_v15(test_text, base_path)
+        else:
+            result = run_mlx_v20(test_text, base_path, use_speaker_cache=use_speaker_cache)
+        results.append(result)
+
+        # Step 2: Read base audio and apply different speeds offline
+        if result.success:
+            base_audio, base_sr = sf.read(base_path, dtype="float32")
+            for s in speeds:
+                if abs(s - 1.0) < 1e-3:
+                    continue  # already have 1.0x
+                out_path = str(OUTPUT_DIR / f"bench_mlx_{ver}_speed_{s:.2f}x.wav")
+                stretched = time_stretch_wsola(base_audio, rate=s, sample_rate=base_sr)
+                sf.write(out_path, stretched, base_sr)
+                dur = len(stretched) / base_sr
+                print(f"  {s:.2f}x -> {out_path} ({dur:.2f}s)")
+                r = TestResult(name=f"MLX {ver} {s:.2f}x", output_file=out_path)
+                r.success = True
+                r.audio_duration = dur
+                results.append(r)
+
+    print_summary(results)
 
 
 def print_quantize_summary(results: List[TestResult]):
@@ -531,10 +594,12 @@ def main():
     parser.add_argument("-q", "--quantize", type=str, default=None, help="Quantization level (4, 8, or fp32)")
     parser.add_argument("-t", "--text", type=str, default=None, help="Custom text to synthesize")
     parser.add_argument("-r", "--ref-audio", type=str, default=None, help="Custom reference audio file")
-    parser.add_argument("-o", "--output-dir", type=str, default=None, help="Output directory (default: test_outputs/)")
+    parser.add_argument("-o", "--output-dir", type=str, default=None, help="Output directory (default: test_benchmark/)")
     parser.add_argument("--emotion-test", action="store_true", help="Run v2.0 emotion test (happy, sad)")
+    parser.add_argument("--speed-test", action="store_true", help="Run speed benchmark (0.75x, 0.9x, 1.0x, 1.1x, 1.25x, 1.5x)")
     parser.add_argument("--emo-alpha", type=float, default=1.0, help="Emotion intensity 0.0-1.0 (default: 1.0)")
     parser.add_argument("--no-speaker-cache", action="store_true", help="Disable v2.0 speaker cache (use raw audio)")
+    parser.add_argument("--speed", type=float, default=1.0, help="Playback speed 0.5-2.0 (default: 1.0)")
     args = parser.parse_args()
 
     # Update paths if specified
@@ -551,6 +616,17 @@ def main():
     # Run emotion benchmark if requested
     if args.emotion_test:
         run_emotion_benchmark(text=args.text, run_pytorch=not args.mlx_only, run_mlx=not args.pytorch_only, use_speaker_cache=not args.no_speaker_cache, emo_alpha=args.emo_alpha)
+        return
+
+    # Run speed benchmark if requested
+    if args.speed_test:
+        run_speed_benchmark(
+            text=args.text,
+            run_v15=not args.v20_only,
+            run_v20=not args.v15_only,
+            use_speaker_cache=not args.no_speaker_cache,
+            speed=args.speed,
+        )
         return
 
     # Run quantization benchmark if requested
@@ -593,41 +669,41 @@ def main():
     # If custom text provided, use unified output names
     if args.text:
         if run_mlx and run_v15:
-            results.append(run_mlx_v15(args.text, str(OUTPUT_DIR / "test_mlx_v15.wav"), args.quantize))
+            results.append(run_mlx_v15(args.text, str(OUTPUT_DIR / "bench_mlx_v15.wav"), args.quantize, speed=args.speed))
         if run_mlx and run_v20:
-            results.append(run_mlx_v20(args.text, str(OUTPUT_DIR / "test_mlx_v20.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
+            results.append(run_mlx_v20(args.text, str(OUTPUT_DIR / "bench_mlx_v20.wav"), args.quantize, use_speaker_cache=use_speaker_cache, speed=args.speed))
         if run_pytorch and run_v15:
-            results.append(run_pytorch_v15(args.text, str(OUTPUT_DIR / "test_pytorch_v15.wav")))
+            results.append(run_pytorch_v15(args.text, str(OUTPUT_DIR / "bench_pytorch_v15.wav")))
         if run_pytorch and run_v20:
-            results.append(run_pytorch_v20(args.text, str(OUTPUT_DIR / "test_pytorch_v20.wav")))
+            results.append(run_pytorch_v20(args.text, str(OUTPUT_DIR / "bench_pytorch_v20.wav")))
     else:
         # MLX v1.5
         if run_mlx and run_v15:
             if run_chinese:
-                results.append(run_mlx_v15(chinese_text, str(OUTPUT_DIR / "test_mlx_v15_chinese.wav"), args.quantize))
+                results.append(run_mlx_v15(chinese_text, str(OUTPUT_DIR / "bench_mlx_v15_chinese.wav"), args.quantize, speed=args.speed))
             if run_english:
-                results.append(run_mlx_v15(english_text, str(OUTPUT_DIR / "test_mlx_v15_english.wav"), args.quantize))
+                results.append(run_mlx_v15(english_text, str(OUTPUT_DIR / "bench_mlx_v15_english.wav"), args.quantize, speed=args.speed))
 
         # MLX v2.0
         if run_mlx and run_v20:
             if run_chinese:
-                results.append(run_mlx_v20(chinese_text, str(OUTPUT_DIR / "test_mlx_v20_chinese.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
+                results.append(run_mlx_v20(chinese_text, str(OUTPUT_DIR / "bench_mlx_v20_chinese.wav"), args.quantize, use_speaker_cache=use_speaker_cache, speed=args.speed))
             if run_english:
-                results.append(run_mlx_v20(english_text, str(OUTPUT_DIR / "test_mlx_v20_english.wav"), args.quantize, use_speaker_cache=use_speaker_cache))
+                results.append(run_mlx_v20(english_text, str(OUTPUT_DIR / "bench_mlx_v20_english.wav"), args.quantize, use_speaker_cache=use_speaker_cache, speed=args.speed))
 
         # PyTorch v1.5
         if run_pytorch and run_v15:
             if run_chinese:
-                results.append(run_pytorch_v15(chinese_text, str(OUTPUT_DIR / "test_pytorch_v15_chinese.wav")))
+                results.append(run_pytorch_v15(chinese_text, str(OUTPUT_DIR / "bench_pytorch_v15_chinese.wav")))
             if run_english:
-                results.append(run_pytorch_v15(english_text, str(OUTPUT_DIR / "test_pytorch_v15_english.wav")))
+                results.append(run_pytorch_v15(english_text, str(OUTPUT_DIR / "bench_pytorch_v15_english.wav")))
 
         # PyTorch v2.0
         if run_pytorch and run_v20:
             if run_chinese:
-                results.append(run_pytorch_v20(chinese_text, str(OUTPUT_DIR / "test_pytorch_v20_chinese.wav")))
+                results.append(run_pytorch_v20(chinese_text, str(OUTPUT_DIR / "bench_pytorch_v20_chinese.wav")))
             if run_english:
-                results.append(run_pytorch_v20(english_text, str(OUTPUT_DIR / "test_pytorch_v20_english.wav")))
+                results.append(run_pytorch_v20(english_text, str(OUTPUT_DIR / "bench_pytorch_v20_english.wav")))
 
     # Print summary
     if results:

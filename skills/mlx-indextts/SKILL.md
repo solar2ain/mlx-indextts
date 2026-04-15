@@ -1,6 +1,6 @@
 ---
 name: mlx-indextts
-description: Generate speech from text using MLX-IndexTTS on Apple Silicon. Use this skill whenever the user wants to: synthesize speech, clone voices, generate audio from text, use TTS (text-to-speech), convert voice, or mentions IndexTTS/MLX-IndexTTS. Also trigger when users ask about voice cloning, speaker conditioning, emotion control, or generating audio files from text input.
+description: "Generate speech from text using MLX-IndexTTS on Apple Silicon. Use this skill whenever the user wants to: synthesize speech, clone voices, generate audio from text, use TTS (text-to-speech), convert voice, or mentions IndexTTS/MLX-IndexTTS. Also trigger when users ask about voice cloning, speaker conditioning, emotion control, or generating audio files from text input."
 ---
 
 # MLX-IndexTTS
@@ -61,6 +61,7 @@ uv run mlx-indextts generate \
 - `--memory-limit`: GPU memory limit in GB
 - `--max-tokens`: Maximum mel tokens (default: 800 for v1.5, 1500 for v2.0)
 - `--segment-overlap`: Crossfade overlap between segments in ms (default: 50, 0 to disable)
+- `--speed`: Playback speed 0.5-2.0 (default: 1.0). Uses WSOLA time-stretch, no pitch change. Values around 0.8-1.3 work best.
 
 **v2.0-only Parameters:**
 - `--emotion`: Emotion control: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm

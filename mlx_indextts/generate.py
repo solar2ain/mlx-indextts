@@ -17,6 +17,109 @@ from mlx_indextts.models.gpt import UnifiedVoice
 from mlx_indextts.models.bigvgan import BigVGAN
 
 
+def compress_silence(
+    mel_codes: List[int],
+    silent_token: int = 52,
+    max_consecutive: int = 30,
+    keep: int = 10,
+) -> List[int]:
+    """Compress consecutive silence tokens to prevent unnatural long pauses.
+
+    Matches PyTorch IndexTTS remove_long_silence logic: if more than
+    max_consecutive silent tokens exist, shrink runs to at most `keep`.
+    """
+    count = sum(1 for c in mel_codes if c == silent_token)
+    if count <= max_consecutive:
+        return mel_codes
+
+    result = []
+    consecutive = 0
+    for code in mel_codes:
+        if code != silent_token:
+            result.append(code)
+            consecutive = 0
+        elif consecutive < keep:
+            result.append(code)
+            consecutive += 1
+        # else: skip excess silence token
+    return result
+
+
+def time_stretch_wsola(
+    audio: np.ndarray,
+    rate: float,
+    frame_ms: int = 30,
+    sample_rate: int = 24000,
+) -> np.ndarray:
+    """Time-stretch audio using WSOLA (Waveform Similarity Overlap-Add).
+
+    Much better than phase vocoder for speech — preserves timbre and naturalness.
+    rate > 1.0 speeds up, rate < 1.0 slows down. No pitch change.
+    """
+    if abs(rate - 1.0) < 1e-3:
+        return audio
+
+    frame_len = int(sample_rate * frame_ms / 1000)
+    half = frame_len // 2
+    # How far the output pointer advances per frame
+    syn_hop = half
+    # How far the input pointer advances per frame
+    ana_hop = int(syn_hop * rate)
+    search = half // 2  # search range for best overlap
+
+    n = len(audio)
+    # Pre-allocate output buffer
+    out_len = int(n / rate) + frame_len
+    output = np.zeros(out_len, dtype=np.float32)
+    window = np.hanning(frame_len).astype(np.float32)
+    norm = np.zeros(out_len, dtype=np.float32)
+
+    in_pos = 0
+    out_pos = 0
+
+    while in_pos + frame_len < n and out_pos + frame_len < out_len:
+        if out_pos == 0:
+            best_offset = 0
+        else:
+            # Search for best match in a region around the expected position
+            lo = max(0, in_pos - search)
+            hi = min(n - frame_len, in_pos + search)
+            if lo >= hi:
+                best_offset = 0
+            else:
+                # Cross-correlation to find best overlap
+                ref = output[out_pos:out_pos + half]
+                best_corr = -np.inf
+                best_offset = 0
+                for offset in range(lo, hi):
+                    candidate = audio[offset:offset + half]
+                    corr = np.dot(ref, candidate)
+                    if corr > best_corr:
+                        best_corr = corr
+                        best_offset = offset - in_pos
+
+        src_pos = in_pos + best_offset
+        if src_pos < 0:
+            src_pos = 0
+        if src_pos + frame_len > n:
+            break
+
+        frame = audio[src_pos:src_pos + frame_len] * window
+        output[out_pos:out_pos + frame_len] += frame
+        norm[out_pos:out_pos + frame_len] += window
+
+        in_pos += ana_hop
+        out_pos += syn_hop
+
+    # Normalize overlapping regions
+    mask = norm > 1e-8
+    output[mask] /= norm[mask]
+
+    # Trim to actual content
+    last_nonzero = np.max(np.where(mask)[0]) + 1 if np.any(mask) else out_pos
+    return output[:last_nonzero]
+
+
 def crossfade_segments(
     audio_segments: List[mx.array],
     sample_rate: int,
@@ -333,6 +436,7 @@ class IndexTTS:
         seed: Optional[int] = None,
         verbose: bool = False,
         segment_overlap_ms: int = 50,
+        speed: float = 1.0,
     ) -> mx.array:
         """Generate speech from text.
 
@@ -349,6 +453,7 @@ class IndexTTS:
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
             segment_overlap_ms: Overlap duration in ms for crossfade (only used when interval_silence=0)
+            speed: Playback speed multiplier (0.5-2.0, default 1.0). Uses time-stretch without pitch change.
 
         Returns:
             Generated audio waveform (samples,)
@@ -453,6 +558,12 @@ class IndexTTS:
             gpt_end = time.perf_counter()
             total_gpt_time += gpt_end - gpt_start
 
+            # Compress long silence runs
+            orig_len = len(mel_codes)
+            mel_codes = compress_silence(mel_codes)
+            if verbose and len(mel_codes) < orig_len:
+                print(f"  Silence compression: {orig_len} -> {len(mel_codes)} tokens")
+
             total_mel_tokens += len(mel_codes)
 
             if verbose:
@@ -477,8 +588,11 @@ class IndexTTS:
             audio = self.bigvgan(latents, ref_mel)
             audio = audio.squeeze()  # Remove batch and channel dims
 
-            # Clamp
-            audio = mx.clip(audio, -1.0, 1.0)
+            # Peak normalization + clamp with headroom
+            peak = mx.abs(audio).max()
+            if peak > 1.0:
+                audio = audio / mx.maximum(peak, mx.array(1e-6))
+            audio = mx.clip(audio, -0.99, 0.99)
             mx.eval(audio)
             bigvgan_end = time.perf_counter()
             total_bigvgan_time += bigvgan_end - bigvgan_start
@@ -516,6 +630,14 @@ class IndexTTS:
             print(f"  GPT gen: {total_gpt_time:.2f}s")
             print(f"  Latent: {total_latent_time:.2f}s")
             print(f"  BigVGAN: {total_bigvgan_time:.2f}s")
+
+        # Apply speed control via WSOLA time-stretch (no pitch change)
+        if speed != 1.0:
+            audio_np = np.array(final_audio)
+            audio_np = time_stretch_wsola(audio_np, rate=speed, sample_rate=self.sample_rate)
+            final_audio = mx.array(audio_np)
+            if verbose:
+                print(f"Speed: {speed:.2f}x")
 
         return final_audio
 

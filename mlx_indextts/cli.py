@@ -140,6 +140,7 @@ def generate_command(args):
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
             segment_overlap_ms=getattr(args, 'segment_overlap', 50),
+            speed=getattr(args, 'speed', 1.0),
         )
     else:
         from mlx_indextts.generate import IndexTTS
@@ -164,6 +165,7 @@ def generate_command(args):
             seed=getattr(args, 'seed', None),
             verbose=args.verbose,
             segment_overlap_ms=getattr(args, 'segment_overlap', 50),
+            speed=getattr(args, 'speed', 1.0),
         )
 
         tts.save_audio(audio, args.output)
@@ -393,6 +395,12 @@ def main():
         type=float,
         default=0.6,
         help="[v2.0 only] Emotion intensity 0.0-1.0 (0=reference audio, 1=full specified, default: 0.6)",
+    )
+    generate_parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Playback speed 0.5-2.0 (default: 1.0). Time-stretch without pitch change.",
     )
     generate_parser.set_defaults(func=generate_command)
 
