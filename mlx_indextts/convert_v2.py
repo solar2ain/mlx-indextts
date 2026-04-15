@@ -289,7 +289,7 @@ def convert_model(
     if quantize_bits:
         print(f"Quantization: {quantize_bits}-bit (GPT only)")
     else:
-        print(f"Quantization: None (fp32)")
+        print("Quantization: None (fp32)")
 
     # 1. Convert GPT v2 weights
     gpt_path = model_dir / "gpt.pth"
@@ -332,7 +332,7 @@ def convert_model(
         print(f"Warning: S2Mel checkpoint not found at {s2mel_path}")
 
     # 3. Convert BigVGAN v2 weights (from HuggingFace)
-    print(f"\n[3/3] Converting BigVGAN v2 from HuggingFace...")
+    print("\n[3/3] Converting BigVGAN v2 from HuggingFace...")
     repo_id = "nvidia/bigvgan_v2_22khz_80band_256x"
 
     # Download and load weights
@@ -351,7 +351,7 @@ def convert_model(
     print(f"  Saved {len(bigvgan_weights)} tensors to {bigvgan_output}")
 
     # 4. Export vq2emb weights from Semantic Codec
-    print(f"\n[4/5] Exporting vq2emb weights from Semantic Codec...")
+    print("\n[4/5] Exporting vq2emb weights from Semantic Codec...")
     vq2emb_weights = export_vq2emb_weights(cfg)
     vq2emb_output = output_dir / "vq2emb.safetensors"
     mx.save_safetensors(str(vq2emb_output), vq2emb_weights)
@@ -406,7 +406,7 @@ def convert_model(
         print(f"Copied {cfg.w2v_stat} to {output_dir / w2v_stat_path.name}")
 
     print(f"\n✓ Conversion complete! Model saved to {output_dir}")
-    print(f"\nOutput files:")
+    print("\nOutput files:")
     for f in sorted(output_dir.iterdir()):
         size_mb = f.stat().st_size / 1024 / 1024
         print(f"  {f.name}: {size_mb:.1f} MB")

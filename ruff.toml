@@ -1,0 +1,14 @@
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # line too long - let formatter handle it
+    "E741",   # ambiguous variable name (common in math/ML code)
+    "F401",   # unused imports - many are re-exports or conditional
+    "F841",   # unused variable - often intentional in ML code
+]
+
+[lint.per-file-ignores]
+"mlx_indextts/indextts/**" = ["E", "F", "W"]  # inlined upstream code, don't lint
+"scripts/**" = ["F401", "F841"]

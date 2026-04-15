@@ -319,7 +319,7 @@ def convert_model(
     if quantize_bits:
         print(f"Quantization: {quantize_bits}-bit")
     else:
-        print(f"Quantization: None (fp32)")
+        print("Quantization: None (fp32)")
 
     # Convert GPT weights
     gpt_path = model_dir / config.gpt_checkpoint

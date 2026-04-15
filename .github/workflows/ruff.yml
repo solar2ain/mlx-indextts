@@ -1,0 +1,13 @@
+name: Ruff
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install ruff
+      run: pip install ruff
+    - name: Ruff check
+      run: ruff check .

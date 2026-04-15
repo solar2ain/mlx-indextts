@@ -217,7 +217,8 @@ def dump_s2mel_outputs(device: str):
         "fmax": None if cfg.s2mel['preprocess_params']['spect_params'].get('fmax', "None") == "None" else 8000,
         "center": False
     }
-    mel_fn = lambda x: mel_spectrogram(x, **mel_fn_args)
+    def mel_fn(x):
+        return mel_spectrogram(x, **mel_fn_args)
 
     # Prepare test data
     ref_audio_path = Path.home() / "Projects" / "mlx-indextts" / "ref_audios" / "voice_01.wav"

@@ -134,7 +134,7 @@ def parse_pytorch_output(output: str, result: TestResult):
 
 def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestResult:
     """Generate using MLX v1.5."""
-    name = f"MLX v1.5" + (f" q{quantize}" if quantize else "")
+    name = "MLX v1.5" + (f" q{quantize}" if quantize else "")
     result = TestResult(name=name, output_file=output)
     cmd = [
         "uv", "run", "mlx-indextts", "generate",
@@ -170,7 +170,7 @@ def run_mlx_v15(text: str, output: str, quantize: Optional[str] = None) -> TestR
 
 def run_mlx_v20(text: str, output: str, quantize: Optional[str] = None, emotion: Optional[str] = None, emo_alpha: float = 1.0, use_speaker_cache: bool = True) -> TestResult:
     """Generate using MLX v2.0."""
-    name = f"MLX v2.0" + (f" q{quantize}" if quantize else "") + (f" {emotion}" if emotion else "")
+    name = "MLX v2.0" + (f" q{quantize}" if quantize else "") + (f" {emotion}" if emotion else "")
     result = TestResult(name=name, output_file=output)
 
     # Use speaker cache for faster testing
@@ -324,7 +324,7 @@ def get_metal_memory() -> float:
         mx.eval(mx.zeros(1))
         peak = mx.metal.get_peak_memory() / 1024 / 1024
         return peak
-    except:
+    except Exception:
         return 0.0
 
 
@@ -339,9 +339,9 @@ def ensure_v20_speaker_cache(ref_audio: Path, cache_path: Path) -> Path:
             print(f"Using cached speaker: {cache_path}")
             return cache_path
         else:
-            print(f"Speaker cache outdated, regenerating...")
+            print("Speaker cache outdated, regenerating...")
     else:
-        print(f"Pre-computing v2.0 speaker conditioning...")
+        print("Pre-computing v2.0 speaker conditioning...")
 
     # Generate speaker cache
     cmd = [
@@ -540,9 +540,10 @@ def main():
     # Update paths if specified
     if args.ref_audio:
         REF_AUDIO = Path(args.ref_audio).expanduser().resolve()
+        SPEAKER_V20_CACHE = OUTPUT_DIR / Path(REF_AUDIO.stem + ".npz")
     if args.output_dir:
         OUTPUT_DIR = Path(args.output_dir).expanduser().resolve()
-        SPEAKER_V20_CACHE = OUTPUT_DIR / "speaker_v20_cache.npz"
+        SPEAKER_V20_CACHE = OUTPUT_DIR / Path(REF_AUDIO.stem + ".npz")
 
     # Ensure output directory exists
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
