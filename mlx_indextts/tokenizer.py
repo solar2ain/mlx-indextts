@@ -17,7 +17,8 @@ PUNCTUATION_MARKS_TOKENS = [
     "▁.",
     # "▁!", # unk in some tokenizers
     "▁?",
-    "▁...",  # ellipsis
+    "...",  # ellipsis (without space prefix)
+    "▁...",  # ellipsis (with space prefix)
 ]
 
 
